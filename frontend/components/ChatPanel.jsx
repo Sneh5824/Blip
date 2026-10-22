@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { safeHttpUrl, safeDataUrl, isSameOrigin } from "../lib/url";
 
 const QUICK_REACTIONS = ["👍", "🔥", "😂", "👏", "💡"];
 const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
@@ -119,7 +120,7 @@ function pickAudioMimeType() {
 }
 
 // ── Message Bubble ──────────────────────────────────────────────────────────
-function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentGuestId, onOpenLinkPreview }) {
+function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentUserId, onOpenLinkPreview }) {
   if (msg.type === "system") {
     return (
       <div className="flex justify-center my-1">
@@ -131,27 +132,32 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentGuestId, 
   }
 
   if (msg.type === "problem_link") {
+    const href = safeHttpUrl(msg.content);
     return (
       <div className={`flex ${isOwn ? "justify-end" : "justify-start"} mb-2 msg-enter`}>
         <div className="max-w-[85%] rounded-xl px-4 py-3" style={{ background: "rgba(220,38,38,0.08)", border: "1px solid rgba(220,38,38,0.22)" }}>
           <p className="text-xs font-medium mb-1.5 text-red-400">
             Problem shared by {msg.senderName}
           </p>
-          <a
-            href={msg.content}
-            target="_blank"
-            rel="noreferrer"
-            className="text-sm text-white underline underline-offset-2 hover:text-red-300 break-all"
-            onClick={(e) => {
-              if (!onOpenLinkPreview) return;
-              if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-              if (!canUseSidePreview()) return;
-              e.preventDefault();
-              onOpenLinkPreview(msg.content);
-            }}
-          >
-            {msg.content}
-          </a>
+          {href ? (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sm text-white underline underline-offset-2 hover:text-red-300 break-all"
+              onClick={(e) => {
+                if (!onOpenLinkPreview) return;
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                if (!canUseSidePreview()) return;
+                e.preventDefault();
+                onOpenLinkPreview(href);
+              }}
+            >
+              {msg.content}
+            </a>
+          ) : (
+            <span className="text-sm text-white break-all">{msg.content}</span>
+          )}
         </div>
       </div>
     );
@@ -159,8 +165,9 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentGuestId, 
 
   if (msg.type === "attachment") {
     const attachment = msg.attachment || {};
-    const isImage = attachment.kind === "image";
-    const isAudio = attachment.kind === "audio";
+    const dataUrl = safeDataUrl(attachment.dataUrl);
+    const isImage = attachment.kind === "image" && dataUrl;
+    const isAudio = attachment.kind === "audio" && dataUrl;
     return (
       <div className={`flex items-end gap-2 mb-2 msg-enter ${isOwn ? "flex-row-reverse" : "flex-row"}`}>
         {!isOwn && (
@@ -192,9 +199,9 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentGuestId, 
             )}
 
             {isImage ? (
-              <a href={attachment.dataUrl} target="_blank" rel="noreferrer" title="Open image">
+              <a href={dataUrl} target="_blank" rel="noreferrer" title="Open image">
                 <img
-                  src={attachment.dataUrl}
+                  src={dataUrl}
                   alt={attachment.fileName || "image"}
                   className="rounded-lg max-h-[240px] object-contain"
                   style={{ border: "1px solid rgba(255,255,255,0.16)", background: "rgba(0,0,0,0.2)" }}
@@ -225,7 +232,7 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentGuestId, 
                     {formatSize(attachment.size || 0)}
                   </span>
                 </div>
-                <audio controls preload="metadata" src={attachment.dataUrl} className="w-full h-9" />
+                <audio controls preload="metadata" src={dataUrl} className="w-full h-9" />
                 {Number.isFinite(Number(attachment.durationSec)) && Number(attachment.durationSec) > 0 && (
                   <p className="mt-1 text-[10px]" style={{ color: "rgba(255,255,255,0.55)" }}>
                     Duration: {formatDuration(Number(attachment.durationSec))}
@@ -234,7 +241,7 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentGuestId, 
               </div>
             ) : (
               <a
-                href={attachment.dataUrl}
+                href={dataUrl || undefined}
                 download={attachment.fileName || "attachment"}
                 className="flex items-center gap-2 rounded-lg px-2.5 py-2 transition-colors"
                 style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.16)" }}
@@ -319,7 +326,7 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentGuestId, 
         {msg.type === "text" && (
           <div className={`flex items-center flex-wrap gap-1 mt-1 mx-1 ${isOwn ? "justify-end" : "justify-start"}`}>
             {Object.entries(msg.reactions || {}).map(([emoji, users]) => {
-              const reacted = Array.isArray(users) && users.includes(currentGuestId);
+              const reacted = Array.isArray(users) && users.includes(currentUserId);
               const count = Array.isArray(users) ? users.length : 0;
               if (!count) return null;
               return (
@@ -371,7 +378,7 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentGuestId, 
 export default function ChatPanel({
   messages = [],
   onSendMessage,
-  currentGuestId,
+  currentUserId,
   onTypingChange = () => {},
   typingUsers = [],
   onToggleReaction = () => {},
@@ -670,8 +677,13 @@ export default function ChatPanel({
 
   const openLinkPreview = useCallback((url) => {
     if (!url || typeof url !== "string") return;
-    const cleanUrl = url.trim();
-    if (!/^https?:\/\//i.test(cleanUrl)) return;
+    const cleanUrl = safeHttpUrl(url);
+    if (!cleanUrl) return;
+    // Never embed this app itself: a scripted same-origin iframe could escape its sandbox.
+    if (isSameOrigin(cleanUrl)) {
+      window.open(cleanUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
 
     const type = getLinkPreviewType(cleanUrl);
     const embedUrl = type === "youtube" ? getYouTubeEmbedUrl(cleanUrl) : cleanUrl;
@@ -731,8 +743,8 @@ export default function ChatPanel({
             <MessageBubble
               key={msg.id}
               msg={msg}
-              isOwn={msg.senderId === currentGuestId}
-              currentGuestId={currentGuestId}
+              isOwn={Boolean(currentUserId) && msg.senderId === currentUserId}
+              currentUserId={currentUserId}
               onToggleReaction={onToggleReaction}
               onReply={(sourceMsg) => setReplyTarget(sourceMsg)}
               onOpenLinkPreview={openLinkPreview}

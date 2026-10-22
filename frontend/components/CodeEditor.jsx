@@ -107,17 +107,17 @@ const CURSOR_COLORS = [
   "#c084fc", // violet
 ];
 
-function hashGuestId(guestId = "") {
+function hashUserId(userId = "") {
   let hash = 0;
-  for (let i = 0; i < guestId.length; i += 1) {
-    hash = (hash << 5) - hash + guestId.charCodeAt(i);
+  for (let i = 0; i < userId.length; i += 1) {
+    hash = (hash << 5) - hash + userId.charCodeAt(i);
     hash |= 0;
   }
   return Math.abs(hash);
 }
 
-function colorForGuest(guestId) {
-  return CURSOR_COLORS[hashGuestId(guestId) % CURSOR_COLORS.length];
+function colorForUser(userId) {
+  return CURSOR_COLORS[hashUserId(userId) % CURSOR_COLORS.length];
 }
 
 function hexToRgba(hex, alpha) {
@@ -131,19 +131,22 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function classSuffixForGuest(guestId = "") {
-  return `u${hashGuestId(guestId)}`;
+function classSuffixForUser(userId = "") {
+  return `u${hashUserId(userId)}`;
 }
 
 export default function CodeEditor({
   code,
   onCodeChange,
-  readOnly = false,
-  currentGuestId,
+  language,
+  onLanguageChange = () => {},
+  roomId,
+  guestId,
+  currentUserId,
   remoteCursors = {},
   onCursorActivity = () => {},
 }) {
-  const [lang, setLang] = useState("javascript");
+  const lang = PISTON_LANG[language] ? language : "javascript";
   const [running, setRunning] = useState(false);
   const [runningTests, setRunningTests] = useState(false);
   const [output, setOutput] = useState(null);
@@ -166,7 +169,6 @@ export default function CodeEditor({
   const nextTestIdRef = useRef(3);
 
   const displayCode = code || PLACEHOLDERS[lang];
-  const isFirstRender = useRef(true);
   const emitChange = useDebounce(onCodeChange, 300);
   const emitCursor = useDebounce((payload) => onCursorActivity(payload), 80);
 
@@ -180,8 +182,8 @@ export default function CodeEditor({
     };
   }, []);
 
-  const ensureCursorStyles = useCallback((guestId) => {
-    if (!guestId || injectedUsersRef.current.has(guestId)) return;
+  const ensureCursorStyles = useCallback((userId) => {
+    if (!userId || injectedUsersRef.current.has(userId)) return;
 
     if (!dynamicStyleRef.current) {
       dynamicStyleRef.current = document.createElement("style");
@@ -189,8 +191,8 @@ export default function CodeEditor({
       document.head.appendChild(dynamicStyleRef.current);
     }
 
-    const color = colorForGuest(guestId);
-    const suffix = classSuffixForGuest(guestId);
+    const color = colorForUser(userId);
+    const suffix = classSuffixForUser(userId);
     const cursorClass = `.monaco-editor .blip-remote-cursor-${suffix}`;
     const selectionClass = `.monaco-editor .blip-remote-selection-${suffix}`;
     dynamicStyleRef.current.appendChild(document.createTextNode(`
@@ -204,7 +206,7 @@ ${selectionClass} {
 }
 `));
 
-    injectedUsersRef.current.add(guestId);
+    injectedUsersRef.current.add(userId);
   }, []);
 
   useEffect(() => {
@@ -215,13 +217,13 @@ ${selectionClass} {
     const next = [];
 
     for (const cursor of Object.values(remoteCursors || {})) {
-      if (!cursor || cursor.guestId === currentGuestId) continue;
+      if (!cursor || cursor.userId === currentUserId) continue;
 
       const clean = sanitizeCursorShape(cursor);
       if (!clean) continue;
 
-      ensureCursorStyles(cursor.guestId);
-      const suffix = classSuffixForGuest(cursor.guestId);
+      ensureCursorStyles(cursor.userId);
+      const suffix = classSuffixForUser(cursor.userId);
 
       if (clean.selection) {
         const { startLineNumber, startColumn, endLineNumber, endColumn } = clean.selection;
@@ -250,7 +252,7 @@ ${selectionClass} {
     }
 
     decorationIdsRef.current = editor.deltaDecorations(decorationIdsRef.current, next);
-  }, [remoteCursors, currentGuestId, ensureCursorStyles]);
+  }, [remoteCursors, currentUserId, ensureCursorStyles]);
 
   const publishLocalCursor = useCallback(() => {
     const editor = editorRef.current;
@@ -290,15 +292,11 @@ ${selectionClass} {
   };
 
   const handleEditorChange = (value) => {
-    if (isFirstRender.current) {
-      isFirstRender.current = false;
-      return;
-    }
     emitChange(value || "");
   };
 
   const handleLangChange = (newLang) => {
-    setLang(newLang);
+    onLanguageChange(newLang);
     setOutput(null);
     setTestResults({});
     if (!code) onCodeChange(PLACEHOLDERS[newLang]);
@@ -310,6 +308,8 @@ ${selectionClass} {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        roomId,
+        guestId,
         language: PISTON_LANG[lang],
         code: displayCode,
         stdin,
@@ -434,16 +434,14 @@ ${selectionClass} {
 
         <button
           onClick={runCode}
-          disabled={running || runningTests || readOnly}
-          title={readOnly ? "Only host can run code" : "Run code (Ctrl+Enter)"}
+          disabled={running || runningTests}
+          title="Run code"
           className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-semibold transition-all ${
-            readOnly ? "cursor-not-allowed opacity-30" : running ? "cursor-wait" : "cursor-pointer"
+            running ? "cursor-wait" : "cursor-pointer"
           }`}
-          style={readOnly
-            ? { background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.25)" }
-            : running
-              ? { background: "rgba(22,163,74,0.15)", border: "1px solid rgba(22,163,74,0.3)", color: "#4ade80" }
-              : { background: "rgba(22,163,74,0.18)", border: "1px solid rgba(22,163,74,0.35)", color: "#4ade80" }
+          style={running
+            ? { background: "rgba(22,163,74,0.15)", border: "1px solid rgba(22,163,74,0.3)", color: "#4ade80" }
+            : { background: "rgba(22,163,74,0.18)", border: "1px solid rgba(22,163,74,0.35)", color: "#4ade80" }
           }
         >
           {running ? (
@@ -490,9 +488,9 @@ ${selectionClass} {
             </button>
             <button
               onClick={runAllTests}
-              disabled={running || runningTests || readOnly || testCases.length === 0}
+              disabled={running || runningTests || testCases.length === 0}
               className="text-xs px-2 py-1 rounded"
-              style={{ background: "rgba(220,38,38,0.16)", color: "#fca5a5", opacity: (running || runningTests || readOnly || testCases.length === 0) ? 0.45 : 1 }}
+              style={{ background: "rgba(220,38,38,0.16)", color: "#fca5a5", opacity: (running || runningTests || testCases.length === 0) ? 0.45 : 1 }}
             >
               {runningTests ? "Running Tests..." : "Run Tests"}
             </button>
@@ -581,7 +579,6 @@ ${selectionClass} {
             scrollBeyondLastLine: false,
             smoothScrolling: true,
             cursorBlinking: "smooth",
-            readOnly,
             automaticLayout: true,
             padding: { top: 12 },
           }}

@@ -69,8 +69,10 @@ const DISPLAY_NAMES = [
 
 /**
  * Returns the persisted guest identity.
- * - guestId  : stable (kept in localStorage so reconnects work within a tab session)
- * - displayName : re-randomised on every page load for freshness
+ * - guestId     : stable (localStorage). It is a private credential — the server
+ *                 uses it to recognise the host and never shows it to others.
+ * - displayName : random per browser tab (sessionStorage), so a refresh keeps
+ *                 your name but a new tab or visit gets a fresh one.
  */
 export function getOrCreateIdentity() {
   if (typeof window === "undefined") return { guestId: "", displayName: "" };
@@ -81,24 +83,11 @@ export function getOrCreateIdentity() {
     localStorage.setItem(GUEST_ID_KEY, guestId);
   }
 
-  // Always pick a new random name so every visit feels fresh
-  const displayName = DISPLAY_NAMES[Math.floor(Math.random() * DISPLAY_NAMES.length)];
-  localStorage.setItem(DISPLAY_NAME_KEY, displayName);
+  let displayName = sessionStorage.getItem(DISPLAY_NAME_KEY);
+  if (!displayName) {
+    displayName = DISPLAY_NAMES[Math.floor(Math.random() * DISPLAY_NAMES.length)];
+    sessionStorage.setItem(DISPLAY_NAME_KEY, displayName);
+  }
 
   return { guestId, displayName };
-}
-
-/** Marks a roomId as created by this identity (used to detect host role). */
-export function markAsHost(roomId) {
-  if (typeof window === "undefined") return;
-  const myRooms = JSON.parse(localStorage.getItem("ds_myRooms") || "{}");
-  myRooms[roomId] = true;
-  localStorage.setItem("ds_myRooms", JSON.stringify(myRooms));
-}
-
-/** Returns true if this client created the given room. */
-export function isRoomHost(roomId) {
-  if (typeof window === "undefined") return false;
-  const myRooms = JSON.parse(localStorage.getItem("ds_myRooms") || "{}");
-  return !!myRooms[roomId];
 }

@@ -6,12 +6,36 @@ import Timer from "../../components/Timer";
 import ParticipantList from "../../components/ParticipantList";
 import ChatPanel from "../../components/ChatPanel";
 import SnapExpired from "../../components/SnapExpired";
-import { getOrCreateIdentity, isRoomHost } from "../../lib/identity";
+import { getOrCreateIdentity } from "../../lib/identity";
 import { getSocket, destroySocket } from "../../lib/socket";
+import { safeHttpUrl } from "../../lib/url";
 
 const CodeEditor = dynamic(() => import("../../components/CodeEditor"), { ssr: false });
 
 const STATUS = { LOADING: "loading", ACTIVE: "active", EXPIRED: "expired", ERROR: "error" };
+
+let sysMsgCounter = 0;
+const systemMessage = (content) => ({
+  id: `sys-${Date.now()}-${++sysMsgCounter}`,
+  type: "system",
+  content,
+  timestamp: Date.now(),
+});
+
+// ── Countdown shown while the host is disconnected ──────────────────────────
+function HostAwayBanner({ graceEndsAt }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = Math.max(0, Math.ceil((graceEndsAt - now) / 1000));
+  return (
+    <div className="flex-none px-4 py-1.5 text-xs text-center" style={{ background: "rgba(245,158,11,0.12)", borderBottom: "1px solid rgba(245,158,11,0.25)", color: "#fcd34d" }}>
+      The host disconnected. The room ends in {secs}s unless they come back.
+    </div>
+  );
+}
 
 // ── Drag-resize hook ────────────────────────────────────────────────────────
 function useResize(initialPx, min, max) {
@@ -84,6 +108,11 @@ export default function RoomPage() {
   const [code,         setCode]         = useState("");
   const [isHost,       setIsHost]       = useState(false);
   const [identity,     setIdentity]     = useState(null);
+  const [selfUserId,   setSelfUserId]   = useState(null);
+  const [language,     setLanguage]     = useState("javascript");
+  const [hostStatus,   setHostStatus]   = useState({ connected: true, graceEndsAt: null });
+  const [connected,    setConnected]    = useState(true);
+  const [notice,       setNotice]       = useState("");
 
   // UI state
   const [probInput,    setProbInput]    = useState("");
@@ -100,6 +129,16 @@ export default function RoomPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const socketRef = useRef(null);
+  const selfUserIdRef = useRef(null);
+  const noticeTimerRef = useRef(null);
+
+  const showNotice = useCallback((message) => {
+    setNotice(message);
+    clearTimeout(noticeTimerRef.current);
+    noticeTimerRef.current = setTimeout(() => setNotice(""), 4000);
+  }, []);
+
+  useEffect(() => () => clearTimeout(noticeTimerRef.current), []);
 
   /* ── 1. Load identity ────────────────────────────────────────────────── */
   useEffect(() => {
@@ -113,16 +152,28 @@ export default function RoomPage() {
     const socket = getSocket();
     socketRef.current = socket;
 
+    const dropCursor = (userId) => setRemoteCursors((prev) => {
+      if (!prev[userId]) return prev;
+      const next = { ...prev };
+      delete next[userId];
+      return next;
+    });
+
     // ── handlers ──────────────────────────────────────────────────────────
-    const onRoomJoined = ({ room, participants, messages, code, isHost: host }) => {
+    const onRoomJoined = ({ room, participants, messages, code, isHost: host, selfUserId: me, hostStatus: hs }) => {
+      selfUserIdRef.current = me;
+      setSelfUserId(me);
       setRoom(room);
       setParticipants(participants);
       setMessages(messages);
       setTypingUsers([]);
       setRemoteCursors({});
       setCode(code || "");
-      setIsHost((room?.visibility || "private") === "public" ? false : (host || isRoomHost(roomId)));
-      if (room.problemLink) setProbLink(room.problemLink);
+      setLanguage(room.language || "javascript");
+      setIsHost(Boolean(host));
+      setHostStatus(hs || { connected: true, graceEndsAt: null });
+      setProbLink(room.problemLink || "");
+      setConnected(true);
       setStatus(STATUS.ACTIVE);
     };
 
@@ -132,95 +183,102 @@ export default function RoomPage() {
         return [...prev, msg];
       });
       if (msg.senderId) {
-        setTypingUsers((prev) => prev.filter((u) => u.guestId !== msg.senderId));
+        setTypingUsers((prev) => prev.filter((u) => u.userId !== msg.senderId));
       }
     };
 
     const onCodeUpdated = ({ code: newCode }) => setCode(newCode);
 
-    const onCursorUpdated = ({ guestId, displayName, position, selection }) => {
-      if (!guestId || guestId === identity?.guestId) return;
+    const onLanguageUpdated = ({ language: lang, changedBy }) => {
+      setLanguage(lang);
+      if (changedBy) showNotice(`${changedBy} switched the editor to ${lang}.`);
+    };
+
+    const onCursorUpdated = ({ userId, displayName, position, selection }) => {
+      if (!userId || userId === selfUserIdRef.current) return;
       setRemoteCursors((prev) => ({
         ...prev,
-        [guestId]: { guestId, displayName, position, selection },
+        [userId]: { userId, displayName, position, selection },
       }));
     };
 
-    const onCursorRemoved = ({ guestId }) => {
-      if (!guestId) return;
-      setRemoteCursors((prev) => {
-        if (!prev[guestId]) return prev;
-        const next = { ...prev };
-        delete next[guestId];
-        return next;
-      });
+    const onCursorRemoved = ({ userId }) => {
+      if (userId) dropCursor(userId);
     };
 
     const onReactionUpdated = ({ messageId, reactions }) => {
       setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, reactions } : m)));
     };
 
-    const onTypingUpdate = ({ guestId, displayName, isTyping }) => {
+    const onTypingUpdate = ({ userId, displayName, isTyping }) => {
       setTypingUsers((prev) => {
-        const filtered = prev.filter((u) => u.guestId !== guestId);
+        const filtered = prev.filter((u) => u.userId !== userId);
         if (!isTyping) return filtered;
-        return [...filtered, { guestId, displayName }];
+        return [...filtered, { userId, displayName }];
       });
     };
 
     const onParticipantsUpdate = (list) => {
       setParticipants(list);
-      const active = new Set(list.map((p) => p.guestId));
+      const active = new Set(list.map((p) => p.userId));
       setRemoteCursors((prev) => {
         const next = {};
-        for (const [guestId, data] of Object.entries(prev)) {
-          if (active.has(guestId)) next[guestId] = data;
+        for (const [userId, data] of Object.entries(prev)) {
+          if (active.has(userId)) next[userId] = data;
         }
         return next;
       });
     };
 
-    const onUserJoined = ({ displayName }) => {
-      const sysMsg = {
-        id: `sys-${Date.now()}`, type: "system",
-        content: `${displayName} joined the room`, timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, sysMsg]);
-      setTypingUsers((prev) => prev.filter((u) => u.displayName !== displayName));
+    const onUserJoined = ({ userId, displayName }) => {
+      setMessages((prev) => [...prev, systemMessage(`${displayName} joined the room`)]);
+      setTypingUsers((prev) => prev.filter((u) => u.userId !== userId));
     };
 
-    const onUserLeft = ({ guestId, displayName }) => {
-      const sysMsg = {
-        id: `sys-${Date.now()}`, type: "system",
-        content: `${displayName} left the room`, timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, sysMsg]);
-      if (guestId) {
-        setTypingUsers((prev) => prev.filter((u) => u.guestId !== guestId));
-        setRemoteCursors((prev) => {
-          if (!prev[guestId]) return prev;
-          const next = { ...prev };
-          delete next[guestId];
-          return next;
-        });
+    const onUserLeft = ({ userId, displayName }) => {
+      setMessages((prev) => [...prev, systemMessage(`${displayName} left the room`)]);
+      if (userId) {
+        setTypingUsers((prev) => prev.filter((u) => u.userId !== userId));
+        dropCursor(userId);
       }
     };
 
     const onProblemShared = ({ link }) => setProbLink(link);
 
+    const onHostStatus = (hs) => setHostStatus(hs);
+
     const onRoomExpired = () => {
       setStatus(STATUS.EXPIRED);
     };
 
+    // Fatal: the room could not be joined.
     const onRoomError = ({ message }) => {
       setErrorMsg(message);
       setStatus(STATUS.ERROR);
     };
 
+    // Non-fatal: an action was rejected; stay in the room.
+    const onActionError = ({ message }) => showNotice(message);
+
+    const joinRoom = () => {
+      socket.emit("join_room", {
+        roomId,
+        guestId:     identity.guestId,
+        displayName: identity.displayName,
+      });
+    };
+
+    // A fresh server-side socket after any reconnect is not in the room yet.
+    const onConnect = () => joinRoom();
+    const onDisconnect = () => setConnected(false);
+
     // ── register ──────────────────────────────────────────────────────────
+    socket.on("connect",             onConnect);
+    socket.on("disconnect",          onDisconnect);
     socket.on("room_joined",         onRoomJoined);
     socket.on("receive_message",     onReceiveMessage);
     socket.on("code_updated",        onCodeUpdated);
+    socket.on("language_updated",    onLanguageUpdated);
     socket.on("cursor_updated",      onCursorUpdated);
     socket.on("cursor_removed",      onCursorRemoved);
     socket.on("reaction_updated",    onReactionUpdated);
@@ -229,20 +287,22 @@ export default function RoomPage() {
     socket.on("user_joined",         onUserJoined);
     socket.on("user_left",           onUserLeft);
     socket.on("problem_shared",      onProblemShared);
+    socket.on("host_status",         onHostStatus);
     socket.on("room_expired",        onRoomExpired);
     socket.on("room_error",          onRoomError);
+    socket.on("action_error",        onActionError);
 
     // ── join ──────────────────────────────────────────────────────────────
-    socket.emit("join_room", {
-      roomId,
-      guestId:     identity.guestId,
-      displayName: identity.displayName,
-    });
+    if (socket.connected) joinRoom();
 
     return () => {
+      socket.emit("leave_room");
+      socket.off("connect",             onConnect);
+      socket.off("disconnect",          onDisconnect);
       socket.off("room_joined",         onRoomJoined);
       socket.off("receive_message",     onReceiveMessage);
       socket.off("code_updated",        onCodeUpdated);
+      socket.off("language_updated",    onLanguageUpdated);
       socket.off("cursor_updated",      onCursorUpdated);
       socket.off("cursor_removed",      onCursorRemoved);
       socket.off("reaction_updated",    onReactionUpdated);
@@ -251,88 +311,63 @@ export default function RoomPage() {
       socket.off("user_joined",         onUserJoined);
       socket.off("user_left",           onUserLeft);
       socket.off("problem_shared",      onProblemShared);
+      socket.off("host_status",         onHostStatus);
       socket.off("room_expired",        onRoomExpired);
       socket.off("room_error",          onRoomError);
+      socket.off("action_error",        onActionError);
     };
-  }, [identity, roomId]);
+  }, [identity, roomId, showNotice]);
 
   /* ── Actions ─────────────────────────────────────────────────────────── */
   const sendMessage = useCallback((payload, replyTo = null) => {
-    if (!identity || !roomId) return;
-
     const isObjectPayload = payload && typeof payload === "object";
     const content = isObjectPayload ? String(payload.content || "") : String(payload || "");
     const type = isObjectPayload ? String(payload.type || "text") : "text";
     const attachment = isObjectPayload ? (payload.attachment || null) : null;
 
-    socketRef.current?.emit("send_message", {
-      roomId,
-      guestId:     identity.guestId,
-      displayName: identity.displayName,
-      content,
-      type,
-      attachment,
-      replyTo,
-    });
-    socketRef.current?.emit("typing_status", {
-      roomId,
-      guestId: identity.guestId,
-      displayName: identity.displayName,
-      isTyping: false,
-    });
-  }, [identity, roomId]);
+    socketRef.current?.emit("send_message", { content, type, attachment, replyTo });
+    socketRef.current?.emit("typing_status", { isTyping: false });
+  }, []);
 
   const handleTypingStatus = useCallback((isTyping) => {
-    if (!identity || !roomId) return;
-    socketRef.current?.emit("typing_status", {
-      roomId,
-      guestId: identity.guestId,
-      displayName: identity.displayName,
-      isTyping,
-    });
-  }, [identity, roomId]);
+    socketRef.current?.emit("typing_status", { isTyping });
+  }, []);
 
   const toggleReaction = useCallback((messageId, emoji) => {
-    if (!identity || !roomId || !messageId || !emoji) return;
-    socketRef.current?.emit("toggle_reaction", {
-      roomId,
-      messageId,
-      emoji,
-      guestId: identity.guestId,
-    });
-  }, [identity, roomId]);
+    if (!messageId || !emoji) return;
+    socketRef.current?.emit("toggle_reaction", { messageId, emoji });
+  }, []);
 
   const updateCode = useCallback((newCode) => {
     setCode(newCode);
-    socketRef.current?.emit("code_update", { roomId, code: newCode });
-  }, [roomId]);
+    socketRef.current?.emit("code_update", { code: newCode });
+  }, []);
+
+  const changeLanguage = useCallback((lang) => {
+    setLanguage(lang);
+    socketRef.current?.emit("language_update", { language: lang });
+  }, []);
 
   const emitCursorActivity = useCallback((cursorData) => {
-    if (!identity || !roomId || !cursorData) return;
+    if (!cursorData) return;
     socketRef.current?.emit("cursor_update", {
-      roomId,
-      guestId: identity.guestId,
-      displayName: identity.displayName,
       position: cursorData.position,
       selection: cursorData.selection,
     });
-  }, [identity, roomId]);
+  }, []);
 
   const shareProblem = () => {
-    const link = probInput.trim();
-    if (!link || !identity) return;
-    socketRef.current?.emit("share_problem", {
-      roomId,
-      guestId:     identity.guestId,
-      displayName: identity.displayName,
-      link,
-    });
-    setProbLink(link);
+    const link = safeHttpUrl(probInput);
+    if (!link) {
+      showNotice("Problem link must be a full http(s) URL.");
+      return;
+    }
+    socketRef.current?.emit("share_problem", { link });
     setProbInput("");
   };
 
   const handleEndRoom = () => {
-    socketRef.current?.emit("end_room", { roomId, guestId: identity?.guestId });
+    socketRef.current?.emit("end_room");
     setShowEndDlg(false);
   };
 
@@ -367,8 +402,8 @@ export default function RoomPage() {
     lines.push("PARTICIPANTS");
     lines.push("------------");
     participants.forEach((p, i) => {
-      const role = p.guestId === room?.hostId ? "HOST" : "MEMBER";
-      lines.push(`${i + 1}. ${p.displayName} (${role}) [${p.guestId}]`);
+      const role = p.userId === room?.hostUserId ? "HOST" : "MEMBER";
+      lines.push(`${i + 1}. ${p.displayName} (${role})`);
     });
     if (participants.length === 0) lines.push("(none)");
     lines.push("");
@@ -422,7 +457,11 @@ export default function RoomPage() {
     setTimeout(() => setExported(false), 2000);
   };
 
-  const goHome = () => { destroySocket(); router.push("/"); };
+  const goHome = () => {
+    socketRef.current?.emit("leave_room");
+    destroySocket();
+    router.push("/");
+  };
 
   /* ── Render: Loading ─────────────────────────────────────────────────── */
   if (status === STATUS.LOADING) {
@@ -592,6 +631,21 @@ export default function RoomPage() {
           )}
         </header>
 
+        {!connected && (
+          <div className="flex-none px-4 py-1.5 text-xs text-center" style={{ background: "rgba(220,38,38,0.12)", borderBottom: "1px solid rgba(220,38,38,0.25)", color: "#fca5a5" }}>
+            Connection lost. Reconnecting…
+          </div>
+        )}
+        {connected && !isPublicRoom && !hostStatus.connected && hostStatus.graceEndsAt && (
+          <HostAwayBanner graceEndsAt={hostStatus.graceEndsAt} />
+        )}
+
+        {notice && (
+          <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 max-w-[90vw] px-4 py-2.5 rounded-lg text-sm animate-slide-up" role="status" style={{ background: "#1a0b0b", border: "1px solid rgba(220,38,38,0.35)", color: "#fecaca", boxShadow: "0 8px 30px rgba(0,0,0,0.5)" }}>
+            {notice}
+          </div>
+        )}
+
         {/* ── Body ──────────────────────────────────────────────────────── */}
         <div className="flex-1 flex overflow-hidden">
 
@@ -611,8 +665,8 @@ export default function RoomPage() {
             <div className="flex-1 overflow-hidden">
               <ParticipantList
                 participants={participants}
-                hostId={room?.hostId}
-                currentGuestId={identity?.guestId}
+                hostUserId={room?.hostUserId}
+                currentUserId={selfUserId}
                 collapsed={sidebarCollapsed}
                 onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
               />
@@ -625,9 +679,9 @@ export default function RoomPage() {
                 Problem Link
               </p>
 
-              {probLink && (
+              {safeHttpUrl(probLink) && (
                 <a
-                  href={probLink}
+                  href={safeHttpUrl(probLink)}
                   target="_blank"
                   rel="noreferrer"
                   className="block text-xs truncate mb-2 hover:text-white transition-colors text-red-400"
@@ -692,7 +746,7 @@ export default function RoomPage() {
                   onTypingChange={handleTypingStatus}
                   typingUsers={typingUsers}
                   onToggleReaction={toggleReaction}
-                  currentGuestId={identity?.guestId}
+                  currentUserId={selfUserId}
                 />
               </div>
             </div>
@@ -706,8 +760,11 @@ export default function RoomPage() {
                 <CodeEditor
                   code={code}
                   onCodeChange={updateCode}
-                  currentGuestId={identity?.guestId}
-                  participants={participants}
+                  language={language}
+                  onLanguageChange={changeLanguage}
+                  roomId={roomId}
+                  guestId={identity?.guestId}
+                  currentUserId={selfUserId}
                   remoteCursors={remoteCursors}
                   onCursorActivity={emitCursorActivity}
                 />

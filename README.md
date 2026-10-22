@@ -116,7 +116,7 @@ Blip can be used in real environments where teams need instant, low-overhead col
 - Capacity and sharding:
   max users per public room with overflow room balancing.
 - Abuse prevention:
-  message rate limits, spam filtering, and temporary mute policies.
+  spam filtering and temporary mute policies (basic rate limits are already in place).
 - Better moderation:
   report/hide tools for public rooms.
 - Presence enhancements:
@@ -124,7 +124,9 @@ Blip can be used in real environments where teams need instant, low-overhead col
 - Persistent optional exports:
   optional downloadable summaries for non-sensitive workflows.
 - Production deployment hardening:
-  timer recovery strategy, health probes, centralized logging, metrics.
+  container sandbox for code execution, health probes, centralized logging, metrics.
+- Conflict-free collaborative editing:
+  replace whole-document sync with a CRDT (e.g. Yjs) so simultaneous edits merge.
 - Authentication extension (optional mode):
   support org-based verified rooms while preserving anonymous default mode.
 
@@ -153,11 +155,13 @@ This project can be extended as a mini-project or major-project base in areas li
 ```text
 .
 |-- backend/
-|   |-- package.json
-|   |-- redisClient.js
-|   |-- server.js
-|   |-- sessionManager.js
-|   `-- socket.js
+|   |-- server.js          REST API, admin API, code-run endpoint, startup
+|   |-- socket.js          Socket.IO events (all identity bound server-side)
+|   |-- sessionManager.js  Redis data layer (rooms, participants, messages, reactions, code)
+|   |-- roomLifecycle.js   expiry timers, host grace period, restart recovery, system public rooms
+|   |-- codeRunner.js      async, time/output-limited code execution
+|   |-- rateLimit.js       in-memory rate limiting
+|   `-- test/              end-to-end integration tests
 |-- frontend/
 |   |-- components/
 |   |-- lib/
@@ -218,15 +222,55 @@ npm run dev
 
 Frontend: http://localhost:3000
 
+## Configuration
+
+Backend (`backend/.env`):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `5001` | HTTP / Socket.IO port |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection |
+| `FRONTEND_URL` | `*` | Allowed CORS origin |
+| `ADMIN_PASSWORD` | (unset) | Enables `/admin`; admin login is disabled without it |
+| `HOST_GRACE_MS` | `45000` | How long a private room waits for a disconnected host before ending |
+| `CODE_EXECUTION` | enabled | Set to `off` to disable `/api/run` (recommended for public deployments) |
+| `CODE_EXEC_MAX_CONCURRENT` | `4` | Parallel code runs before the runner answers "busy" |
+| `ROOM_CREATE_LIMIT_PER_MIN` | `20` | Room creations allowed per IP per minute |
+
+Frontend: `NEXT_PUBLIC_BACKEND_URL` (default `http://localhost:5001`).
+
+## Testing
+
+The backend has an end-to-end suite that boots the real server against Redis and drives it over HTTP and Socket.IO (auth, host grace period, attachments, URL validation, reactions under concurrency, TTLs, code execution, admin API, restart recovery). It never flushes Redis, but point it at a throwaway instance anyway:
+
+```bash
+redis-server --port 6390
+cd backend
+TEST_REDIS_URL=redis://127.0.0.1:6390 npm test
+```
+
+The C++ test is skipped automatically when the machine's `g++` cannot link a program.
+
 ## API
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | POST | `/api/rooms` | Create private room |
 | GET | `/api/rooms/:roomId` | Fetch room metadata / validate room |
-| GET | `/api/public-rooms` | List active system public rooms |
-| POST | `/api/run` | Execute code snippet (supported languages) |
+| GET | `/api/public-rooms` | List active public rooms (system + admin-created) |
+| POST | `/api/run` | Execute code; caller must be a participant of an active coding room (`roomId`, `guestId`) |
 | GET | `/health` | Health check |
+| POST | `/api/admin/login` | Exchange `ADMIN_PASSWORD` for a 1-hour bearer token (rate limited) |
+| GET | `/api/admin/stats` | Active rooms, public rooms, participants, messages |
+| GET | `/api/admin/public-rooms` | List public rooms |
+| POST | `/api/admin/public-rooms` | Create a public room (`timeout`, `roomType`, optional `roomName` / `roomId`; 409 if the id is taken) |
+| DELETE | `/api/admin/public-rooms/:roomId` | Remove a public room (system rooms restart with a fresh cycle) |
+
+## Identity Model
+
+- Each browser has a private `guestId` (localStorage). It is only ever sent to the server and decides who the host is.
+- The server derives a public `userId` per room (`sha256(roomId:guestId)`) and uses only that in anything it broadcasts (participants, messages, reactions, cursors). Other users therefore cannot learn or spoof the host's identity.
+- After `join_room`, the server binds room and identity to the socket; later events ignore any `roomId` / `guestId` the client sends.
 
 ## Socket Events
 
@@ -234,46 +278,69 @@ Frontend: http://localhost:3000
 
 | Event | Purpose |
 | --- | --- |
-| `join_room` | Join active room |
-| `send_message` | Send text/attachment/reply message |
+| `join_room` | Join active room (`roomId`, `guestId`, `displayName`); re-sent automatically after reconnects |
+| `leave_room` | Leave the current room |
+| `send_message` | Send text/attachment/reply message (rate limited) |
 | `typing_status` | Update typing indicator |
-| `toggle_reaction` | React/unreact to message |
-| `code_update` | Sync coding editor text |
+| `toggle_reaction` | React/unreact to message (fixed emoji set) |
+| `code_update` | Sync coding editor text (max 200KB) |
+| `language_update` | Change the shared editor language |
 | `cursor_update` | Broadcast collaborative cursor/selection |
-| `share_problem` | Share coding problem link |
-| `end_room` | End room (host-only private rooms) |
+| `share_problem` | Share an http(s) problem link (host only in private rooms) |
+| `end_room` | End room (host only) |
 
 ### Server -> Client
 
 | Event | Purpose |
 | --- | --- |
-| `room_joined` | Initial room payload |
+| `room_joined` | Initial room payload, incl. `selfUserId` and `hostStatus` |
 | `receive_message` | New message delivered |
 | `typing_update` | Typing status changes |
 | `reaction_updated` | Message reaction updates |
 | `code_updated` | Shared code changes |
+| `language_updated` | Shared editor language changed |
 | `cursor_updated` | Remote cursor update |
 | `cursor_removed` | Remove remote cursor |
 | `participants_update` | Participant list updates |
 | `user_joined` | Join system message |
 | `user_left` | Leave system message |
 | `problem_shared` | Problem link update |
+| `host_status` | Host disconnected (with `graceEndsAt`) or reconnected |
 | `room_expired` | Room expired and cleaned up |
-| `room_error` | Room operation error |
+| `room_error` | Joining failed (fatal) |
+| `action_error` | An action was rejected (non-fatal, shown as a toast) |
 
 ## Redis Key Schema
 
+Every per-room key expires in Redis at the room's `expiresAt`, so data is removed even if the backend is down when a room ends.
+
 | Key | Type | Description |
 | --- | --- | --- |
-| `room:{roomId}` | String | Room metadata |
-| `participants:{roomId}` | List | Current participants |
-| `messages:{roomId}` | List | Chat history while room is active |
+| `room:{roomId}` | String | Room metadata (JSON) |
+| `participants:{roomId}` | Hash | `guestId` -> participant JSON |
+| `messages:{roomId}` | List | Chat history (last 300 messages) |
+| `msgids:{roomId}` | Set | Message ids, used to validate reactions |
+| `reactions:{roomId}` | Hash | `messageId` -> `{ emoji: [userId] }` |
 | `code:{roomId}` | String | Shared code content |
+| `rooms:expiry` | Sorted set | roomId scored by `expiresAt`; rebuilds timers after a restart |
+
+## Code Execution Safety
+
+`/api/run` executes code on the backend machine. Guards in place:
+
+- only participants of an active coding room can run code; per-IP rate limit and a concurrency cap
+- asynchronous execution (the server stays responsive), 10s run / 30s compile timeouts that kill the whole process tree, 64KB output cap
+- every run gets its own temp directory, and child processes get a minimal environment (no `ADMIN_PASSWORD`, `REDIS_URL`, ...)
+- JavaScript/TypeScript run under Node's permission model: no file access outside the run directory, no child processes
+
+Python, Java, C++, Go and Rust programs still run with the backend user's OS permissions. For any public deployment, either set `CODE_EXECUTION=off` or run the backend inside a locked-down container.
 
 ## Notes
 
 - Public room IDs are fixed for routing convenience, but names are random per cycle.
 - Room data is ephemeral and deleted on expiry.
+- If the host of a private room disconnects, the room stays open for `HOST_GRACE_MS` so a refresh or network blip does not end it.
+- Code sync is whole-document, last-write-wins: two people typing at the same moment can overwrite each other's latest keystrokes.
 - Some external links may block iframe preview due to browser security headers.
 
 ## Troubleshooting

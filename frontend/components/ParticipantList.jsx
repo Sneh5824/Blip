@@ -2,7 +2,7 @@ function getInitial(name) {
   return name ? name[0].toUpperCase() : "?";
 }
 
-export default function ParticipantList({ participants = [], hostId, currentGuestId, collapsed, onToggleCollapse }) {
+export default function ParticipantList({ participants = [], hostUserId, currentUserId, collapsed, onToggleCollapse }) {
   if (collapsed) {
     return (
       <div className="flex flex-col h-full items-center pt-3 gap-2">
@@ -56,16 +56,11 @@ export default function ParticipantList({ participants = [], hostId, currentGues
         ) : (
           participants.map((p) => (
             <div
-              key={p.guestId}
-              className={`flex items-center gap-2.5 px-4 py-2 transition-colors ${
-                p.guestId === currentGuestId ? "" : ""
-              }`}
-              style={p.guestId === currentGuestId
-                ? { background: "rgba(220,38,38,0.06)" }
-                : { "--hover-bg": "rgba(255,255,255,0.035)" }
-              }
-              onMouseEnter={(e) => { if (p.guestId !== currentGuestId) e.currentTarget.style.background = "rgba(255,255,255,0.035)"; }}
-              onMouseLeave={(e) => { if (p.guestId !== currentGuestId) e.currentTarget.style.background = ""; }}
+              key={p.userId}
+              className="flex items-center gap-2.5 px-4 py-2 transition-colors"
+              style={p.userId === currentUserId ? { background: "rgba(220,38,38,0.06)" } : undefined}
+              onMouseEnter={(e) => { if (p.userId !== currentUserId) e.currentTarget.style.background = "rgba(255,255,255,0.035)"; }}
+              onMouseLeave={(e) => { if (p.userId !== currentUserId) e.currentTarget.style.background = ""; }}
             >
               <div className="relative flex-shrink-0">
                   <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold" style={{ background: "rgba(220,38,38,0.1)", border: "1px solid rgba(220,38,38,0.2)", color: "rgba(255,255,255,0.6)" }}>
@@ -75,14 +70,14 @@ export default function ParticipantList({ participants = [], hostId, currentGues
               </div>
               <div className="flex-1 min-w-0">
                 <p className={`text-sm font-medium truncate ${
-                  p.guestId === currentGuestId ? "text-red-400" : ""
+                  p.userId === currentUserId ? "text-red-400" : ""
                 }`}
-                style={p.guestId !== currentGuestId ? { color: "rgba(255,255,255,0.65)" } : {}}>
+                style={p.userId !== currentUserId ? { color: "rgba(255,255,255,0.65)" } : {}}>
                   {p.displayName}
-                  {p.guestId === currentGuestId && <span className="font-normal" style={{ color: "rgba(255,255,255,0.3)" }}> (you)</span>}
+                  {p.userId === currentUserId && <span className="font-normal" style={{ color: "rgba(255,255,255,0.3)" }}> (you)</span>}
                 </p>
               </div>
-              {p.guestId === hostId && (
+              {p.userId === hostUserId && (
                 <span className="flex-shrink-0 text-[10px] font-semibold uppercase tracking-wide" style={{ color: "#fcd34d" }} title="Host">Host</span>
               )}
             </div>

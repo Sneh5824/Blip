@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Head from "next/head";
 import { useRouter } from "next/router";
-import { getOrCreateIdentity, markAsHost } from "../lib/identity";
+import { getOrCreateIdentity } from "../lib/identity";
 
 const BACKEND  = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5001";
 
@@ -61,7 +61,6 @@ export default function Home() {
         throw new Error(data.error || "Failed to create room.");
       }
       const room = await res.json();
-      markAsHost(room.roomId);
       router.push(`/room/${room.roomId}`);
     } catch (err) {
       setCreateErr(err.message);
@@ -293,7 +292,7 @@ export default function Home() {
               <>
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[11px] uppercase tracking-[0.2em]" style={{ color: "rgba(255,255,255,0.3)" }}>
-                    Open Rooms (10m / 20m)
+                    Open Rooms
                   </p>
                   <button onClick={loadPublicRooms} className="text-xs px-2 py-1 rounded" style={{ background: "rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.72)" }}>
                     Refresh
