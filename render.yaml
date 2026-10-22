@@ -6,6 +6,7 @@ services:
     name: blip-backend
     runtime: node
     plan: free
+    region: singapore   # keep next to the Upstash database (ap-southeast-1)
     rootDir: backend
     buildCommand: npm ci --omit=dev
     startCommand: node server.js
