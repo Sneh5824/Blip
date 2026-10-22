@@ -1,9 +1,12 @@
-require("dotenv").config();
+const config = require("./config");
+config.reportConfig(); // exits with a clear message on invalid production config
+
 const express = require("express");
 const http    = require("http");
 const cors    = require("cors");
 const crypto  = require("crypto");
 const { Server } = require("socket.io");
+const redis = require("./redisClient");
 const sm = require("./sessionManager");
 const lifecycle = require("./roomLifecycle");
 const { runCode, RunnerBusyError, SUPPORTED_LANGUAGES } = require("./codeRunner");
@@ -11,12 +14,20 @@ const { limitByIp } = require("./rateLimit");
 
 const app = express();
 
-app.use(cors({ origin: process.env.FRONTEND_URL || "*" }));
+// Render (and most hosts) sit behind a proxy: use X-Forwarded-For for req.ip,
+// otherwise every visitor shares the proxy's IP in the rate limiters.
+app.set("trust proxy", config.TRUST_PROXY);
+app.disable("x-powered-by");
+app.use((_req, res, next) => {
+  res.set("X-Content-Type-Options", "nosniff");
+  next();
+});
+app.use(cors({ origin: config.CORS_ORIGINS }));
 app.use(express.json({ limit: "256kb" }));
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: process.env.FRONTEND_URL || "*", methods: ["GET", "POST"] },
+  cors: { origin: config.CORS_ORIGINS, methods: ["GET", "POST"] },
   transports: ["websocket", "polling"],
   // Attachments travel as base64 data URLs: 3MB file ≈ 4MB base64 + envelope.
   maxHttpBufferSize: 5 * 1024 * 1024,
@@ -27,7 +38,8 @@ lifecycle.init(io);
 const VALID_TYPES    = ["chat", "coding"];
 const VALID_TIMEOUTS = [10, 20, 30, 60];
 const ROOM_ID_RE     = /^[A-Z0-9]{4,8}$/;
-const CODE_EXECUTION_ENABLED = !["off", "false", "0", "disabled"].includes(String(process.env.CODE_EXECUTION || "").toLowerCase());
+const UUID_RE        = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const CODE_EXECUTION_ENABLED = config.CODE_EXECUTION;
 
 // ─── Admin sessions (token -> expiresAt, in memory) ─────────────────────────
 const adminSessions = new Map();
@@ -101,7 +113,7 @@ const isPublic = (room) => (room.visibility || "private") === "public";
 // ─── REST API ────────────────────────────────────────────────────────────────
 
 // POST /api/rooms  — create a new private room
-app.post("/api/rooms", limitByIp({ windowMs: 60000, max: Number(process.env.ROOM_CREATE_LIMIT_PER_MIN) || 20 }), async (req, res) => {
+app.post("/api/rooms", limitByIp({ windowMs: 60000, max: config.ROOM_CREATE_LIMIT_PER_MIN }), async (req, res) => {
   try {
     const { guestId, displayName, roomType, timeout, roomName, visibility = "private" } = req.body || {};
     if (typeof guestId !== "string" || guestId.length < 8 || guestId.length > 100 || !displayName || !roomType || !timeout) {
@@ -150,7 +162,7 @@ app.get("/api/rooms/:roomId", async (req, res) => {
 // GET /api/public-rooms  — list active public rooms (system + admin-created)
 app.get("/api/public-rooms", async (_req, res) => {
   try {
-    const rooms = await Promise.all((await listActiveRooms(isPublic)).map(publicRoomSummary));
+    const rooms = await Promise.all((await sm.listPublicRooms()).map(publicRoomSummary));
     rooms.sort((a, b) => a.expiresAt - b.expiresAt);
     res.json({ rooms });
   } catch (err) {
@@ -166,7 +178,7 @@ app.post("/api/admin/login",
   async (req, res) => {
     try {
       const { password } = req.body || {};
-      const expected = process.env.ADMIN_PASSWORD;
+      const expected = config.ADMIN_PASSWORD;
       if (!expected) return res.status(500).json({ error: "Admin login not configured on server." });
       if (typeof password !== "string" || !passwordMatches(password, expected)) {
         return res.status(401).json({ error: "Invalid credentials." });
@@ -202,7 +214,7 @@ app.get("/api/admin/stats", requireAdmin, async (_req, res) => {
 // Admin: list all public rooms (including admin-created ones)
 app.get("/api/admin/public-rooms", requireAdmin, async (_req, res) => {
   try {
-    const rooms = await Promise.all((await listActiveRooms(isPublic)).map(async (room) => ({
+    const rooms = await Promise.all((await sm.listPublicRooms()).map(async (room) => ({
       ...(await publicRoomSummary(room)),
       system: Boolean(lifecycle.systemSpec(room.roomId)),
     })));
@@ -299,26 +311,101 @@ app.post("/api/run", limitByIp({ windowMs: 60000, max: 20 }, "Too many runs. Wai
   }
 });
 
+// ─── Attachments ─────────────────────────────────────────────────────────────
+// Ids are random UUIDs only shared inside the room. Only non-SVG images and
+// audio are served inline; everything else is a forced download.
+function contentDisposition(type, fileName) {
+  const ascii = fileName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
+app.get("/api/rooms/:roomId/attachments/:attId", limitByIp({ windowMs: 60000, max: 300 }), async (req, res) => {
+  try {
+    const roomId = req.params.roomId.toUpperCase();
+    const attId = req.params.attId.toLowerCase();
+    if (!ROOM_ID_RE.test(roomId) || !UUID_RE.test(attId)) return res.status(404).json({ error: "Not found." });
+
+    const att = await sm.getAttachment(roomId, attId);
+    if (!att) return res.status(404).json({ error: "Attachment not found or room expired." });
+
+    const inline = (att.mimeType.startsWith("image/") && att.mimeType !== "image/svg+xml") || att.mimeType.startsWith("audio/");
+    res.set({
+      "Content-Type": inline ? att.mimeType : "application/octet-stream",
+      "Content-Disposition": contentDisposition(inline ? "inline" : "attachment", att.fileName || "file"),
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "Cross-Origin-Resource-Policy": "cross-origin",
+      "Cache-Control": "private, max-age=3600, immutable",
+    });
+    res.send(Buffer.from(att.base64, "base64"));
+  } catch (err) {
+    console.error("[API] GET attachment error:", err.message);
+    res.status(500).json({ error: "Internal server error." });
+  }
+});
+
 // ─── Health check ─────────────────────────────────────────────────────────────
-app.get("/health", (_req, res) => res.json({ status: "ok", ts: Date.now() }));
+// Liveness only (always 200 so the host does not restart us during a Redis
+// blip); `redis` reports the connection state without spending a command.
+const startedAt = Date.now();
+app.get("/health", (_req, res) => res.json({
+  status: "ok",
+  redis: redis.isReady ? "ready" : "connecting",
+  uptimeSec: Math.round((Date.now() - startedAt) / 1000),
+  ts: Date.now(),
+}));
 
 // ─── Socket.IO ────────────────────────────────────────────────────────────────
-require("./socket")(io);
+require("./socket")(io, { codeExecution: CODE_EXECUTION_ENABLED });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 5001;
-// Log listen errors and exit gracefully so nodemon can restart cleanly
+// Log listen errors and exit so the host / nodemon restarts cleanly
 server.on("error", (err) => {
-  console.error("[Server] listen error", err);
+  console.error("[Server] listen error:", err.message);
   process.exit(1);
 });
 
-server.listen(PORT, async () => {
+async function initializeRooms(attempt = 1) {
   try {
     await lifecycle.restoreRooms();
     await lifecycle.initializeSystemPublicRooms();
   } catch (err) {
-    console.error("[Server] Failed to initialize rooms:", err.message);
+    console.error(`[Server] Failed to initialize rooms (attempt ${attempt}):`, err.message);
+    if (attempt < 5) setTimeout(() => initializeRooms(attempt + 1), 5000 * attempt).unref();
   }
-  console.log(`[Server] Blip backend running on http://localhost:${PORT}`);
+}
+
+const onListening = async () => {
+  console.log(`[Server] Blip backend listening on ${config.HOST || "all interfaces"}:${config.PORT}`);
+  await redis.whenConnected;
+  await initializeRooms();
+  console.log(`[Server] Blip backend running on http://localhost:${config.PORT}`);
+};
+if (config.HOST) server.listen(config.PORT, config.HOST, onListening);
+else server.listen(config.PORT, onListening);
+
+// ─── Graceful shutdown ───────────────────────────────────────────────────────
+// Hosts send SIGTERM on deploys, restarts and free-tier spin-down. Persist
+// buffered editor content, close sockets (clients auto-reconnect), then exit.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[Server] ${signal} received, shutting down...`);
+  const force = setTimeout(() => process.exit(0), 10000);
+  force.unref();
+  try {
+    await sm.flushPendingCode();
+    await new Promise((resolve) => io.close(() => resolve()));
+    await redis.quit().catch(() => {});
+  } catch (err) {
+    console.error("[Server] shutdown error:", err.message);
+  }
+  process.exit(0);
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
+// A bug in one handler should be logged, not silently kill every room.
+process.on("unhandledRejection", (err) => {
+  console.error("[Server] Unhandled rejection:", err && err.message ? err.message : err);
 });

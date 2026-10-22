@@ -8,6 +8,8 @@ node_modules/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.*
+!.env.example
 
 # Build outputs
 .next/
@@ -24,3 +26,7 @@ Thumbs.db
 
 # Docker
 redis_data/
+
+# Hosting CLIs
+.vercel/
+.render/

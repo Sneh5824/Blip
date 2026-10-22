@@ -1,5 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
+import { BACKEND_URL } from "../lib/config";
 
 // Monaco must be loaded client-side only
 const Monaco = dynamic(() => import("@monaco-editor/react"), { ssr: false });
@@ -143,6 +144,7 @@ export default function CodeEditor({
   roomId,
   guestId,
   currentUserId,
+  codeExecution = true,
   remoteCursors = {},
   onCursorActivity = () => {},
 }) {
@@ -303,8 +305,7 @@ ${selectionClass} {
   };
 
   const executeCode = async (stdin = "") => {
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5001";
-    const res = await fetch(`${backendUrl}/api/run`, {
+    const res = await fetch(`${BACKEND_URL}/api/run`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -434,12 +435,14 @@ ${selectionClass} {
 
         <button
           onClick={runCode}
-          disabled={running || runningTests}
-          title="Run code"
+          disabled={running || runningTests || !codeExecution}
+          title={codeExecution ? "Run code" : "Code execution is disabled on this server"}
           className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-semibold transition-all ${
             running ? "cursor-wait" : "cursor-pointer"
           }`}
-          style={running
+          style={!codeExecution
+            ? { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.3)", cursor: "not-allowed" }
+            : running
             ? { background: "rgba(22,163,74,0.15)", border: "1px solid rgba(22,163,74,0.3)", color: "#4ade80" }
             : { background: "rgba(22,163,74,0.18)", border: "1px solid rgba(22,163,74,0.35)", color: "#4ade80" }
           }
@@ -476,6 +479,11 @@ ${selectionClass} {
 
       {showTests && (
         <div className="px-4 py-3 flex-shrink-0" style={{ borderBottom: "1px solid rgba(255,255,255,0.055)", background: "#0a0a14" }}>
+          {!codeExecution && (
+            <p className="text-[11px] mb-2 px-2 py-1.5 rounded" style={{ color: "#fcd34d", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)" }}>
+              Running code is disabled on this server. Editing and syncing still work.
+            </p>
+          )}
           <div className="flex items-center gap-2 mb-2">
             <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: "rgba(255,255,255,0.22)" }}>Test Cases</span>
             <div className="flex-1" />
@@ -488,9 +496,10 @@ ${selectionClass} {
             </button>
             <button
               onClick={runAllTests}
-              disabled={running || runningTests || testCases.length === 0}
+              disabled={running || runningTests || testCases.length === 0 || !codeExecution}
+              title={codeExecution ? undefined : "Code execution is disabled on this server"}
               className="text-xs px-2 py-1 rounded"
-              style={{ background: "rgba(220,38,38,0.16)", color: "#fca5a5", opacity: (running || runningTests || testCases.length === 0) ? 0.45 : 1 }}
+              style={{ background: "rgba(220,38,38,0.16)", color: "#fca5a5", opacity: (running || runningTests || testCases.length === 0 || !codeExecution) ? 0.45 : 1 }}
             >
               {runningTests ? "Running Tests..." : "Run Tests"}
             </button>

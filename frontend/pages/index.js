@@ -2,8 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import Head from "next/head";
 import { useRouter } from "next/router";
 import { getOrCreateIdentity } from "../lib/identity";
-
-const BACKEND  = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5001";
+import { BACKEND_URL as BACKEND } from "../lib/config";
 
 const TIMEOUTS = [10, 20, 30, 60];
 
@@ -34,9 +33,32 @@ export default function Home() {
   const [publicRooms, setPublicRooms] = useState([]);
   const [publicLoading, setPublicLoading] = useState(false);
   const [publicErr, setPublicErr] = useState("");
+  // "ok" | "waking" (free hosting spins down when idle) | "down"
+  const [serverState, setServerState] = useState("ok");
 
   useEffect(() => {
     setIdentity(getOrCreateIdentity());
+  }, []);
+
+  /* ── Wake the backend early and tell the user if it is cold-starting ───── */
+  useEffect(() => {
+    let cancelled = false;
+    const slowTimer = setTimeout(() => { if (!cancelled) setServerState("waking"); }, 2500);
+    const started = Date.now();
+    const ping = async () => {
+      try {
+        const res = await fetch(`${BACKEND}/health`, { cache: "no-store" });
+        if (!res.ok) throw new Error(String(res.status));
+        if (!cancelled) setServerState("ok");
+        clearTimeout(slowTimer);
+      } catch {
+        if (cancelled) return;
+        if (Date.now() - started > 120000) { setServerState("down"); clearTimeout(slowTimer); return; }
+        setTimeout(ping, 4000);
+      }
+    };
+    ping();
+    return () => { cancelled = true; clearTimeout(slowTimer); };
   }, []);
 
   /* ── Create room ───────────────────────────────────────────────────────── */
@@ -232,6 +254,16 @@ export default function Home() {
               </button>
             ))}
           </div>
+
+          {serverState !== "ok" && (
+            <div className="flex-shrink-0 px-4 sm:px-7 py-2.5 text-xs flex items-center gap-2" role="status" style={serverState === "down"
+              ? { background: "rgba(220,38,38,0.1)", borderBottom: "1px solid rgba(220,38,38,0.25)", color: "#fca5a5" }
+              : { background: "rgba(245,158,11,0.1)", borderBottom: "1px solid rgba(245,158,11,0.25)", color: "#fcd34d" }}>
+              {serverState === "down"
+                ? "Can't reach the server right now. Please try again in a few minutes."
+                : <><Spinner /> Waking up the server — free hosting sleeps when idle, this can take up to a minute…</>}
+            </div>
+          )}
 
           <div className="flex-1 overflow-y-auto p-4 sm:p-7 flex flex-col gap-5 sm:gap-6">
 

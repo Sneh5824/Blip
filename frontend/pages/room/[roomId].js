@@ -113,6 +113,7 @@ export default function RoomPage() {
   const [hostStatus,   setHostStatus]   = useState({ connected: true, graceEndsAt: null });
   const [connected,    setConnected]    = useState(true);
   const [notice,       setNotice]       = useState("");
+  const [features,     setFeatures]     = useState({ codeExecution: true });
 
   // UI state
   const [probInput,    setProbInput]    = useState("");
@@ -160,7 +161,8 @@ export default function RoomPage() {
     });
 
     // ── handlers ──────────────────────────────────────────────────────────
-    const onRoomJoined = ({ room, participants, messages, code, isHost: host, selfUserId: me, hostStatus: hs }) => {
+    const onRoomJoined = ({ room, participants, messages, code, isHost: host, selfUserId: me, hostStatus: hs, features: f }) => {
+      setFeatures({ codeExecution: true, ...(f || {}) });
       selfUserIdRef.current = me;
       setSelfUserId(me);
       setRoom(room);
@@ -765,6 +767,7 @@ export default function RoomPage() {
                   roomId={roomId}
                   guestId={identity?.guestId}
                   currentUserId={selfUserId}
+                  codeExecution={features.codeExecution}
                   remoteCursors={remoteCursors}
                   onCursorActivity={emitCursorActivity}
                 />

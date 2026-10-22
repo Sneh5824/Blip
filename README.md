@@ -222,22 +222,31 @@ npm run dev
 
 Frontend: http://localhost:3000
 
+## Deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the free-tier setup (Vercel + Render + Upstash), environment variables, limits and troubleshooting.
+
 ## Configuration
 
-Backend (`backend/.env`):
+Backend (`backend/.env`, template in [`backend/.env.example`](backend/.env.example)):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `NODE_ENV` | (unset) | `production` enables strict config validation, trust-proxy, and turns code execution off by default |
 | `PORT` | `5001` | HTTP / Socket.IO port |
+| `HOST` | `0.0.0.0` in production, all interfaces locally | Interface to bind |
 | `REDIS_URL` | `redis://localhost:6379` | Redis connection |
-| `FRONTEND_URL` | `*` | Allowed CORS origin |
+| `FRONTEND_URL` | localhost:3000 | Allowed CORS origin(s), comma-separated; required in production |
 | `ADMIN_PASSWORD` | (unset) | Enables `/admin`; admin login is disabled without it |
 | `HOST_GRACE_MS` | `45000` | How long a private room waits for a disconnected host before ending |
-| `CODE_EXECUTION` | enabled | Set to `off` to disable `/api/run` (recommended for public deployments) |
+| `CODE_EXECUTION` | on in dev, off in production | Enables `/api/run` |
 | `CODE_EXEC_MAX_CONCURRENT` | `4` | Parallel code runs before the runner answers "busy" |
 | `ROOM_CREATE_LIMIT_PER_MIN` | `20` | Room creations allowed per IP per minute |
+| `ROOM_ATTACHMENT_BUDGET_MB` | `20` | Attachment storage per room |
+| `CODE_FLUSH_MS` | `2000` | Max delay before editor content is written to Redis |
+| `TRUST_PROXY` | `1` in production | Proxy hops in front of the app (for client IPs) |
 
-Frontend: `NEXT_PUBLIC_BACKEND_URL` (default `http://localhost:5001`).
+Frontend: `NEXT_PUBLIC_BACKEND_URL` (default `http://localhost:5001` in development only; required for production builds on Vercel). Template: [`frontend/.env.example`](frontend/.env.example).
 
 ## Testing
 
@@ -258,6 +267,7 @@ The C++ test is skipped automatically when the machine's `g++` cannot link a pro
 | POST | `/api/rooms` | Create private room |
 | GET | `/api/rooms/:roomId` | Fetch room metadata / validate room |
 | GET | `/api/public-rooms` | List active public rooms (system + admin-created) |
+| GET | `/api/rooms/:roomId/attachments/:id` | Download a chat attachment (images/audio inline, everything else as a download) |
 | POST | `/api/run` | Execute code; caller must be a participant of an active coding room (`roomId`, `guestId`) |
 | GET | `/health` | Health check |
 | POST | `/api/admin/login` | Exchange `ADMIN_PASSWORD` for a 1-hour bearer token (rate limited) |
@@ -321,12 +331,16 @@ Every per-room key expires in Redis at the room's `expiresAt`, so data is remove
 | `messages:{roomId}` | List | Chat history (last 300 messages) |
 | `msgids:{roomId}` | Set | Message ids, used to validate reactions |
 | `reactions:{roomId}` | Hash | `messageId` -> `{ emoji: [userId] }` |
-| `code:{roomId}` | String | Shared code content |
+| `code:{roomId}` | String | Shared code content (written at most every `CODE_FLUSH_MS`) |
+| `att:{roomId}:{id}` | String | Attachment blob (base64 JSON); messages only carry metadata |
+| `atts:{roomId}` | Set | Attachment ids, for cleanup when the room ends |
+| `attbytes:{roomId}` | String | Bytes of attachments stored, for the per-room budget |
 | `rooms:expiry` | Sorted set | roomId scored by `expiresAt`; rebuilds timers after a restart |
+| `rooms:public` | Sorted set | Public roomIds, so listing does not scan private rooms |
 
 ## Code Execution Safety
 
-`/api/run` executes code on the backend machine. Guards in place:
+`/api/run` executes code on the backend machine. It is **off by default when `NODE_ENV=production`**. Guards in place:
 
 - only participants of an active coding room can run code; per-IP rate limit and a concurrency cap
 - asynchronous execution (the server stays responsive), 10s run / 30s compile timeouts that kill the whole process tree, 64KB output cap

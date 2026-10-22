@@ -1,0 +1,26 @@
+# Render Blueprint for the Blip backend (Express + Socket.IO).
+# Render dashboard → New → Blueprint → select this repository.
+# Secrets marked `sync: false` are entered in the dashboard, never committed.
+services:
+  - type: web
+    name: blip-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: CODE_EXECUTION
+        value: "off"
+      - key: REDIS_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

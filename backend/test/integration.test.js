@@ -37,6 +37,8 @@ function startServer(extraEnv = {}) {
         HOST_GRACE_MS: String(HOST_GRACE_MS),
         FRONTEND_URL: "*",
         ROOM_CREATE_LIMIT_PER_MIN: "1000",
+        ROOM_ATTACHMENT_BUDGET_MB: "6",
+        CODE_FLUSH_MS: "100",
         ...extraEnv,
       },
       stdio: ["ignore", "pipe", "pipe"],
@@ -252,7 +254,70 @@ test("2.5MB attachment is delivered and the sender stays connected", async () =>
   const msg = await got;
   assert.equal(msg.attachment.size, 2.5 * 1024 * 1024, "size is computed server-side");
   assert.equal(msg.attachment.mimeType, "application/octet-stream", "mime comes from the data URL");
+  assert.equal(msg.attachment.dataUrl, undefined, "blob is not broadcast inline");
   assert.ok(member.connected);
+
+  // The blob is served over HTTP as a forced download with locked-down headers.
+  const res = await fetch(`${BASE}/api/rooms/${msg.roomId}/attachments/${msg.attachment.id}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "application/octet-stream");
+  assert.match(res.headers.get("content-disposition"), /^attachment; filename="big.bin"/);
+  assert.match(res.headers.get("content-security-policy"), /sandbox/);
+  assert.equal((await res.arrayBuffer()).byteLength, 2.5 * 1024 * 1024);
+
+  // History holds metadata only.
+  const late = await connect();
+  const j = await join(late, msg.roomId, guest());
+  const hist = j.messages.find((m) => m.id === msg.id);
+  assert.ok(hist.attachment.id && !hist.attachment.dataUrl);
+});
+
+test("images are served inline, SVG never is, unknown ids 404", async () => {
+  const { host, member } = await roomWithTwo();
+  const send = async (fileName, mime) => {
+    const got = once(host, "receive_message");
+    member.emit("send_message", { type: "attachment", attachment: { fileName, dataUrl: dataUrlOfSize(100, mime) } });
+    return (await got);
+  };
+  const png = await send("a.png", "image/png");
+  assert.equal(png.attachment.kind, "image");
+  let res = await fetch(`${BASE}/api/rooms/${png.roomId}/attachments/${png.attachment.id}`);
+  assert.equal(res.headers.get("content-type"), "image/png");
+  assert.match(res.headers.get("content-disposition"), /^inline/);
+
+  const svg = await send("x.svg", "image/svg+xml");
+  assert.equal(svg.attachment.kind, "file");
+  res = await fetch(`${BASE}/api/rooms/${svg.roomId}/attachments/${svg.attachment.id}`);
+  assert.equal(res.headers.get("content-type"), "application/octet-stream");
+
+  res = await fetch(`${BASE}/api/rooms/${png.roomId}/attachments/${crypto.randomUUID()}`);
+  assert.equal(res.status, 404);
+  res = await fetch(`${BASE}/api/rooms/${png.roomId}/attachments/..%2F..%2Fetc`);
+  assert.equal(res.status, 404);
+});
+
+test("per-room attachment budget is enforced", async () => {
+  const { host, member } = await roomWithTwo();
+  for (let i = 0; i < 2; i++) {
+    const got = once(host, "receive_message", 10000);
+    member.emit("send_message", { type: "attachment", attachment: { fileName: `f${i}.bin`, dataUrl: dataUrlOfSize(2.5 * 1024 * 1024) } });
+    await got;
+  }
+  const err = once(member, "action_error", 10000);
+  member.emit("send_message", { type: "attachment", attachment: { fileName: "f3.bin", dataUrl: dataUrlOfSize(2.5 * 1024 * 1024) } });
+  assert.match((await err).message, /storage is full/);
+});
+
+test("ending a room deletes its attachment blobs", async () => {
+  const { room, host, member } = await roomWithTwo();
+  const got = once(host, "receive_message");
+  member.emit("send_message", { type: "attachment", attachment: { fileName: "a.txt", dataUrl: dataUrlOfSize(10, "text/plain") } });
+  const msg = await got;
+  assert.equal(await redis.exists(`att:${room.roomId}:${msg.attachment.id}`), 1);
+  const ended = once(member, "room_expired");
+  host.emit("end_room");
+  await ended;
+  assert.equal(await redis.exists(`att:${room.roomId}:${msg.attachment.id}`), 0);
 });
 
 test("attachment over 3MB is rejected without disconnecting", async () => {
@@ -361,14 +426,15 @@ test("message flood is rate limited", async () => {
 
 // ─── Redis TTL / expiry ──────────────────────────────────────────────────────
 test("all room keys carry a TTL matching the room expiry", async () => {
-  const { room, host } = await roomWithTwo();
+  const { room, host, member } = await roomWithTwo();
   const got = once(host, "receive_message");
   host.emit("send_message", { content: "ttl" });
   const msg = await got;
   host.emit("toggle_reaction", { messageId: msg.id, emoji: "👍" });
   host.emit("code_update", { code: "print(1)" });
-  await sleep(300);
-  for (const key of ["room", "participants", "messages", "msgids", "reactions", "code"]) {
+  member.emit("send_message", { type: "attachment", attachment: { fileName: "t.txt", dataUrl: dataUrlOfSize(10, "text/plain") } });
+  await sleep(500);
+  for (const key of ["room", "participants", "messages", "msgids", "reactions", "code", "atts", "attbytes"]) {
     const ttl = await redis.pTTL(`${key}:${room.roomId}`);
     assert.ok(ttl > 9 * 60 * 1000 && ttl <= 10 * 60 * 1000, `${key} ttl=${ttl}`);
   }
@@ -537,6 +603,85 @@ test("after a restart, room timers are restored and stale participants cleared",
   assert.ok(expired.message);
   assert.equal(await redis.exists(`room:${shortId}`), 0);
   assert.ok(await redis.exists(`room:${room.roomId}`), "unexpired room still exists after restart");
+});
+
+// ─── Production mode (separate server instance) ──────────────────────────────
+const PROD_PORT = PORT - 1;
+const PROD_BASE = `http://127.0.0.1:${PROD_PORT}`;
+const PROD_ORIGIN = "https://blip-test.vercel.app";
+
+function runServer(env) {
+  return spawn(process.execPath, [path.join(__dirname, "..", "server.js")], {
+    env: { ...process.env, REDIS_URL, PORT: String(PROD_PORT), ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+test("production refuses to start without FRONTEND_URL", async () => {
+  const proc = runServer({ NODE_ENV: "production", FRONTEND_URL: "" });
+  let log = "";
+  proc.stdout.on("data", (d) => { log += d; });
+  proc.stderr.on("data", (d) => { log += d; });
+  const code = await new Promise((r) => proc.on("exit", r));
+  assert.equal(code, 1);
+  assert.match(log, /FRONTEND_URL is required in production/);
+  assert.ok(!log.includes("@"), "no credentials in logs");
+});
+
+test("production: strict CORS, code execution off, proxy-aware rate limits", async () => {
+  const proc = runServer({
+    NODE_ENV: "production", FRONTEND_URL: PROD_ORIGIN, ADMIN_PASSWORD: "prod-test-password",
+    CODE_EXECUTION: "", HOST_GRACE_MS: "1500",
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      let log = "";
+      const t = setTimeout(() => reject(new Error("prod server did not start\n" + log)), 15000);
+      const on = (d) => { log += d; if (log.includes("Blip backend running")) { clearTimeout(t); resolve(); } };
+      proc.stdout.on("data", on); proc.stderr.on("data", on);
+    });
+
+    const health = await (await fetch(`${PROD_BASE}/health`)).json();
+    assert.equal(health.redis, "ready");
+
+    const ok = await fetch(`${PROD_BASE}/api/public-rooms`, { headers: { Origin: PROD_ORIGIN } });
+    assert.equal(ok.headers.get("access-control-allow-origin"), PROD_ORIGIN);
+    const evil = await fetch(`${PROD_BASE}/api/public-rooms`, { headers: { Origin: "https://evil.example" } });
+    assert.equal(evil.headers.get("access-control-allow-origin"), null);
+    const dev = await fetch(`${PROD_BASE}/api/public-rooms`, { headers: { Origin: "http://localhost:3000" } });
+    assert.equal(dev.headers.get("access-control-allow-origin"), null, "dev origins not allowed in production");
+
+    // Code execution is off by default in production, and clients are told so.
+    const hostId = guest();
+    const created = await fetch(`${PROD_BASE}/api/rooms`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ guestId: hostId, displayName: "H", roomType: "coding", timeout: 10 }),
+    });
+    const room = await created.json();
+    const s = ioClient(PROD_BASE, { transports: ["websocket"], forceNew: true, reconnection: false, extraHeaders: { Origin: PROD_ORIGIN } });
+    openSockets.add(s);
+    await new Promise((r) => s.once("connect", r));
+    const j = await join(s, room.roomId, hostId);
+    assert.equal(j.features.codeExecution, false);
+    const run = await fetch(`${PROD_BASE}/api/run`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ roomId: room.roomId, guestId: hostId, language: "javascript", code: "1" }),
+    });
+    assert.equal(run.status, 503);
+    s.emit("end_room");
+
+    // Behind a proxy, each client IP gets its own limiter bucket.
+    const login = (ip) => fetch(`${PROD_BASE}/api/admin/login`, {
+      method: "POST", headers: { "content-type": "application/json", "X-Forwarded-For": ip },
+      body: JSON.stringify({ password: "wrong" }),
+    });
+    let last;
+    for (let i = 0; i < 11; i++) last = await login("203.0.113.7");
+    assert.equal(last.status, 429);
+    assert.equal((await login("198.51.100.9")).status, 401, "another IP is not throttled");
+  } finally {
+    await stopServer(proc);
+  }
 });
 
 test("admin login is rate limited", async () => {

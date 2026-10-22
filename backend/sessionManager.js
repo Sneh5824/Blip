@@ -9,14 +9,21 @@ const K = {
   messageIds:   (id) => `msgids:${id}`,         // set of message ids (for reaction validation)
   reactions:    (id) => `reactions:${id}`,      // hash: messageId -> { emoji: [userId] }
   code:         (id) => `code:${id}`,
+  attachment:   (id, attId) => `att:${id}:${attId}`, // attachment blob JSON
+  attachmentIds:(id) => `atts:${id}`,           // set of attachment ids (for cleanup)
+  attachmentBytes:(id) => `attbytes:${id}`,     // running total of stored attachment bytes
   expiryIndex:  "rooms:expiry",                 // zset: roomId scored by expiresAt
+  publicIndex:  "rooms:public",                 // zset: public roomIds scored by expiresAt
 };
 
 const roomDataKeys = (id) => [
   K.room(id), K.participants(id), K.messages(id), K.messageIds(id), K.reactions(id), K.code(id),
+  K.attachmentIds(id), K.attachmentBytes(id),
 ];
 
 const MAX_MESSAGES = 300;
+// Upstash Free has 256MB in total, so each room gets a bounded attachment budget.
+const ROOM_ATTACHMENT_BUDGET = Number(process.env.ROOM_ATTACHMENT_BUDGET_MB || 20) * 1024 * 1024;
 
 // Milliseconds until expiresAt (relative PX works on every Redis version).
 const ttlMs = (expiresAt) => Math.max(1, Number(expiresAt) - Date.now());
@@ -100,6 +107,7 @@ async function createRoom({
       : await redis.set(K.room(id), payload, { PX: ttlMs(expiresAt), NX: true });
     if (ok) {
       await redis.zAdd(K.expiryIndex, { score: expiresAt, value: id });
+      if (visibility === "public") await redis.zAdd(K.publicIndex, { score: expiresAt, value: id });
       return room;
     }
   }
@@ -122,8 +130,11 @@ async function updateRoom(roomId, updates) {
 }
 
 async function deleteRoom(roomId) {
-  await redis.del(roomDataKeys(roomId));
+  pendingCode.delete(roomId);
+  const attIds = await redis.sMembers(K.attachmentIds(roomId));
+  await redis.del([...roomDataKeys(roomId), ...attIds.map((a) => K.attachment(roomId, a))]);
   await redis.zRem(K.expiryIndex, roomId);
+  await redis.zRem(K.publicIndex, roomId);
 }
 
 /** All indexed rooms as [{ roomId, expiresAt }]. */
@@ -132,8 +143,24 @@ async function listIndexedRooms() {
   return rows.map((r) => ({ roomId: r.value, expiresAt: Number(r.score) }));
 }
 
+/** Active public rooms (room objects), without scanning private rooms. */
+async function listPublicRooms() {
+  const ids = await redis.zRange(K.publicIndex, 0, -1);
+  if (!ids.length) return [];
+  const raws = await redis.mGet(ids.map(K.room));
+  const now = Date.now();
+  const rooms = [];
+  for (let i = 0; i < ids.length; i++) {
+    const room = raws[i] ? JSON.parse(raws[i]) : null;
+    if (room && room.status === "active" && room.expiresAt > now) rooms.push(room);
+    else if (!room) await redis.zRem(K.publicIndex, ids[i]); // expired via TTL while we were asleep
+  }
+  return rooms;
+}
+
 async function removeFromIndex(roomId) {
   await redis.zRem(K.expiryIndex, roomId);
+  await redis.zRem(K.publicIndex, roomId);
 }
 
 /** What clients are allowed to see about a room (no host credential). */
@@ -251,13 +278,72 @@ async function toggleMessageReaction(roomId, expiresAt, messageId, emoji, userId
   });
 }
 
+// ─── Attachments ──────────────────────────────────────────────────────────────
+// Blobs live in their own keys so message history stays small: joining a room
+// no longer pulls every file out of Redis, and clients fetch files on demand.
+
+/** Stores a blob; returns false if the room's attachment budget would be exceeded. */
+async function storeAttachment(roomId, expiresAt, attId, { mimeType, fileName, base64, size }) {
+  const total = Number(await redis.incrBy(K.attachmentBytes(roomId), size));
+  if (total > ROOM_ATTACHMENT_BUDGET) {
+    await redis.decrBy(K.attachmentBytes(roomId), size);
+    return false;
+  }
+  await redis.multi()
+    .pExpireAt(K.attachmentBytes(roomId), expiresAt)
+    .set(K.attachment(roomId, attId), JSON.stringify({ mimeType, fileName, base64 }), { PX: ttlMs(expiresAt) })
+    .sAdd(K.attachmentIds(roomId), attId)
+    .pExpireAt(K.attachmentIds(roomId), expiresAt)
+    .exec();
+  return true;
+}
+
+async function getAttachment(roomId, attId) {
+  const raw = await redis.get(K.attachment(roomId, attId));
+  return raw ? JSON.parse(raw) : null;
+}
+
 // ─── Code ─────────────────────────────────────────────────────────────────────
+// Editor updates arrive every few hundred ms while someone types. Redis gets at
+// most one write per room per CODE_FLUSH_MS (saves Upstash commands); readers
+// always see the newest buffered value.
+const CODE_FLUSH_MS = Number(process.env.CODE_FLUSH_MS) || 2000;
+const pendingCode = new Map(); // roomId -> { code, expiresAt, timer }
+
 async function getCode(roomId) {
+  const pending = pendingCode.get(roomId);
+  if (pending) return pending.code;
   return (await redis.get(K.code(roomId))) || "";
 }
 
-async function setCode(roomId, expiresAt, code) {
+async function writeCode(roomId, expiresAt, code) {
   await redis.set(K.code(roomId), code, { PX: ttlMs(expiresAt) });
+}
+
+function setCode(roomId, expiresAt, code) {
+  const pending = pendingCode.get(roomId);
+  if (pending) {
+    pending.code = code;
+    return;
+  }
+  const entry = { code, expiresAt };
+  entry.timer = setTimeout(() => {
+    if (pendingCode.get(roomId) !== entry) return; // room deleted meanwhile
+    pendingCode.delete(roomId);
+    writeCode(roomId, entry.expiresAt, entry.code)
+      .catch((err) => console.error(`[Redis] code write for ${roomId} failed:`, err.message));
+  }, CODE_FLUSH_MS);
+  pendingCode.set(roomId, entry);
+}
+
+/** Writes all buffered code now (graceful shutdown). */
+async function flushPendingCode() {
+  const entries = [...pendingCode.entries()];
+  pendingCode.clear();
+  await Promise.all(entries.map(([roomId, e]) => {
+    clearTimeout(e.timer);
+    return writeCode(roomId, e.expiresAt, e.code).catch(() => {});
+  }));
 }
 
 module.exports = {
@@ -269,6 +355,7 @@ module.exports = {
   updateRoom,
   deleteRoom,
   listIndexedRooms,
+  listPublicRooms,
   removeFromIndex,
   toClientRoom,
   upsertParticipant,
@@ -281,6 +368,9 @@ module.exports = {
   getMessages,
   countMessages,
   toggleMessageReaction,
+  storeAttachment,
+  getAttachment,
   getCode,
   setCode,
+  flushPendingCode,
 };

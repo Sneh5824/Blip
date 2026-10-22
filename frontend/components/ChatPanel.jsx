@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { safeHttpUrl, safeDataUrl, isSameOrigin } from "../lib/url";
+import { safeHttpUrl, isSameOrigin } from "../lib/url";
+import { attachmentUrl } from "../lib/config";
 
 const QUICK_REACTIONS = ["👍", "🔥", "😂", "👏", "💡"];
 const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
@@ -165,9 +166,9 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentUserId, o
 
   if (msg.type === "attachment") {
     const attachment = msg.attachment || {};
-    const dataUrl = safeDataUrl(attachment.dataUrl);
-    const isImage = attachment.kind === "image" && dataUrl;
-    const isAudio = attachment.kind === "audio" && dataUrl;
+    const fileUrl = attachmentUrl(msg.roomId, attachment.id);
+    const isImage = attachment.kind === "image" && fileUrl;
+    const isAudio = attachment.kind === "audio" && fileUrl;
     return (
       <div className={`flex items-end gap-2 mb-2 msg-enter ${isOwn ? "flex-row-reverse" : "flex-row"}`}>
         {!isOwn && (
@@ -199,9 +200,10 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentUserId, o
             )}
 
             {isImage ? (
-              <a href={dataUrl} target="_blank" rel="noreferrer" title="Open image">
+              <a href={fileUrl} target="_blank" rel="noreferrer" title="Open image">
                 <img
-                  src={dataUrl}
+                  src={fileUrl}
+                  loading="lazy"
                   alt={attachment.fileName || "image"}
                   className="rounded-lg max-h-[240px] object-contain"
                   style={{ border: "1px solid rgba(255,255,255,0.16)", background: "rgba(0,0,0,0.2)" }}
@@ -232,7 +234,7 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentUserId, o
                     {formatSize(attachment.size || 0)}
                   </span>
                 </div>
-                <audio controls preload="metadata" src={dataUrl} className="w-full h-9" />
+                <audio controls preload="metadata" src={fileUrl} className="w-full h-9" />
                 {Number.isFinite(Number(attachment.durationSec)) && Number(attachment.durationSec) > 0 && (
                   <p className="mt-1 text-[10px]" style={{ color: "rgba(255,255,255,0.55)" }}>
                     Duration: {formatDuration(Number(attachment.durationSec))}
@@ -241,7 +243,7 @@ function MessageBubble({ msg, isOwn, onReply, onToggleReaction, currentUserId, o
               </div>
             ) : (
               <a
-                href={dataUrl || undefined}
+                href={fileUrl || undefined}
                 download={attachment.fileName || "attachment"}
                 className="flex items-center gap-2 rounded-lg px-2.5 py-2 transition-colors"
                 style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.16)" }}

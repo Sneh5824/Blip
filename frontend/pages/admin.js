@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Head from "next/head";
+import { BACKEND_URL as BACKEND } from "../lib/config";
 
-const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5001";
 const TOKEN_KEY = "adminToken";
 const EXPIRES_KEY = "adminTokenExpiresAt";
 

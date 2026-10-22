@@ -1,4 +1,4 @@
-const { v4: uuidv4 } = require("uuid");
+const { randomUUID: uuidv4 } = require("crypto");
 const sm = require("./sessionManager");
 const lifecycle = require("./roomLifecycle");
 const { createLimiter } = require("./rateLimit");
@@ -69,7 +69,7 @@ function validateAttachment(att) {
       ? "audio"
       : "file";
 
-  const attachment = { dataUrl: att.dataUrl, fileName, mimeType, size, kind };
+  const attachment = { base64: b64, fileName, mimeType, size, kind };
   const duration = Number(att.durationSec);
   if (kind === "audio" && Number.isFinite(duration) && duration > 0) {
     attachment.durationSec = Math.min(3600, Math.floor(duration));
@@ -102,16 +102,19 @@ function cleanSelection(s) {
 }
 
 // ─── Socket module ────────────────────────────────────────────────────────────
-module.exports = (io) => {
+module.exports = (io, { codeExecution = false } = {}) => {
   /** Non-fatal problem with an action (the client stays in the room). */
   const actionError = (socket, message) => socket.emit("action_error", { message });
 
-  /** The active room this socket has joined, or null. */
-  async function joinedRoom(socket) {
-    const { roomId } = socket.data;
-    if (!roomId) return null;
-    const room = await sm.getRoom(roomId);
-    if (!room || room.status !== "active") return null;
+  /**
+   * The room this socket has joined, from the copy cached at join time (no
+   * Redis read). Expiry removes sockets from the Socket.IO room, so membership
+   * of that room is the source of truth for "still active".
+   */
+  function joinedRoom(socket) {
+    const { roomId, room } = socket.data;
+    if (!roomId || !room || !socket.rooms.has(roomId)) return null;
+    if (room.expiresAt <= Date.now()) return null;
     return room;
   }
 
@@ -178,7 +181,10 @@ module.exports = (io) => {
         });
 
         socket.join(roomId);
-        socket.data = { roomId, guestId, userId, displayName, isHost };
+        socket.data = {
+          roomId, guestId, userId, displayName, isHost,
+          room: { roomId, expiresAt: room.expiresAt, roomType: room.roomType, hostId: Boolean(room.hostId) },
+        };
 
         if (isHost) lifecycle.cancelHostGrace(roomId);
 
@@ -196,6 +202,7 @@ module.exports = (io) => {
           code,
           isHost,
           selfUserId: userId,
+          features: { codeExecution },
           hostStatus: { connected: !graceEndsAt, graceEndsAt },
         });
         if (!alreadyPresent) socket.to(roomId).emit("user_joined", { userId, displayName, role });
@@ -220,7 +227,7 @@ module.exports = (io) => {
     // ── send_message ─────────────────────────────────────────────────────────
     socket.on("send_message", async (payload = {}) => {
       try {
-        const room = await joinedRoom(socket);
+        const room = joinedRoom(socket);
         if (!room) return;
         const { roomId, guestId, userId, displayName } = socket.data;
 
@@ -248,7 +255,14 @@ module.exports = (io) => {
             actionError(socket, result.error);
             return;
           }
-          attachment = result.attachment;
+          const { base64, ...meta } = result.attachment;
+          const attId = uuidv4();
+          const stored = await sm.storeAttachment(roomId, room.expiresAt, attId, { ...meta, base64 });
+          if (!stored) {
+            actionError(socket, "This room's attachment storage is full. Send a link instead.");
+            return;
+          }
+          attachment = { id: attId, ...meta };
         }
 
         const msg = {
@@ -282,7 +296,7 @@ module.exports = (io) => {
     // ── toggle_reaction ─────────────────────────────────────────────────────
     socket.on("toggle_reaction", async (payload = {}) => {
       try {
-        const room = await joinedRoom(socket);
+        const room = joinedRoom(socket);
         if (!room) return;
         const { roomId, guestId, userId } = socket.data;
         const messageId = str(payload.messageId, 64);
@@ -304,10 +318,10 @@ module.exports = (io) => {
           actionError(socket, "Code is too large to sync (max 200KB).");
           return;
         }
-        const room = await joinedRoom(socket);
+        const room = joinedRoom(socket);
         if (!room || room.roomType !== "coding") return;
 
-        await sm.setCode(room.roomId, room.expiresAt, payload.code);
+        sm.setCode(room.roomId, room.expiresAt, payload.code);
         socket.to(room.roomId).emit("code_updated", { code: payload.code });
       } catch (err) {
         console.error("[Socket] code_update error:", err.message);
@@ -318,7 +332,7 @@ module.exports = (io) => {
     socket.on("language_update", async (payload = {}) => {
       try {
         if (!EDITOR_LANGUAGES.includes(payload.language)) return;
-        const room = await joinedRoom(socket);
+        const room = joinedRoom(socket);
         if (!room || room.roomType !== "coding") return;
 
         await sm.updateRoom(room.roomId, { language: payload.language });
@@ -346,7 +360,7 @@ module.exports = (io) => {
     // ── share_problem ────────────────────────────────────────────────────────
     socket.on("share_problem", async (payload = {}) => {
       try {
-        const room = await joinedRoom(socket);
+        const room = joinedRoom(socket);
         if (!room) return;
         const { roomId, userId, displayName, isHost } = socket.data;
 
@@ -383,9 +397,9 @@ module.exports = (io) => {
     // ── end_room (host only) ──────────────────────────────────────────────────
     socket.on("end_room", async () => {
       try {
-        const room = await joinedRoom(socket);
+        const room = joinedRoom(socket);
         if (!room) return;
-        if (!room.hostId || room.hostId !== socket.data.guestId) {
+        if (!room.hostId || !socket.data.isHost) {
           actionError(socket, "Only the host can end the room.");
           return;
         }
