@@ -1,393 +1,391 @@
-﻿# Blip
+<div align="center">
 
-Blip is a real-time, anonymous, timed collaboration platform for fast chat and coding sessions.
+# Blip
 
-No sign-up, no accounts, and room data is removed automatically when time runs out.
+### Timed. Anonymous. Gone in a blip.
 
-## Highlights
+**Real-time rooms for chatting and coding together, with nothing left behind.**
 
-- Anonymous identities with random display names
-- Two room modes:
-  - Chat
-  - Coding (shared Monaco editor)
-- Rich real-time chat:
-  - replies and reactions
-  - typing indicators
-  - image/file attachments
-  - voice notes
-  - URL link preview side panel (resizable)
-- Public join flow:
-  - system-provided public rooms (`PUB10M`, `PUB20M`)
-  - no invitation code needed
-  - no host role in public rooms
-  - room names are randomly generated
-- Private room controls:
-  - invite link copy
-  - host export snapshot
-  - host end room
-- Fully responsive UI improvements for mobile and desktop
+<a href="https://blip-ten-iota.vercel.app"><img src="https://img.shields.io/badge/Live%20Demo-blip--ten--iota.vercel.app-dc2626?style=for-the-badge&logo=vercel&logoColor=white" alt="Live demo"></a>
 
-## USP (Unique Selling Proposition)
+![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=node.js&logoColor=white)
+![Socket.IO](https://img.shields.io/badge/Socket.IO-4-010101?logo=socket.io)
+![Redis](https://img.shields.io/badge/Redis-TTL%20storage-DC382D?logo=redis&logoColor=white)
+![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-3-06B6D4?logo=tailwindcss&logoColor=white)
 
-Blip's strongest differentiator is privacy-first, zero-friction collaboration with timed ephemeral rooms.
+[Live demo](https://blip-ten-iota.vercel.app) · [Features](#features) · [Getting started](#getting-started) · [Deployment](DEPLOYMENT.md)
 
-- Instant anonymous entry:
-  users can collaborate without account creation or onboarding friction.
-- Time-boxed by architecture:
-  rooms and room data are automatically destroyed after expiry, enforcing ephemeral communication.
-- Dual collaboration surface in one product:
-  real-time chat and live coding workspace are available in the same room experience.
-- Built-in hostless public mode:
-  system-managed public rooms (`PUB10M`, `PUB20M`) allow open community collaboration without invitations.
-- Lightweight but feature-rich communication:
-  attachments, voice notes, reactions, replies, typing indicators, and link previews are included by default.
+</div>
 
-## Public Room Model
+---
 
-Public rooms are not user-created.
+## About
 
-The backend maintains two rotating public chat rooms:
+Blip lets anyone open a room in seconds, without signing up, and collaborate through live chat and a shared code editor. Every room has a timer. When it runs out, the room and everything in it (messages, files, code) is permanently deleted.
 
-- `PUB10M` (10 minutes)
-- `PUB20M` (20 minutes)
+### Try it
 
-When they expire, they are recreated automatically with fresh random names.
+1. Open **[blip-ten-iota.vercel.app](https://blip-ten-iota.vercel.app)** and click **Create Room**.
+2. Click **Invite** in the room header and open the link in a second browser or a private window.
+3. Chat, react, share a file or edit code together, and watch the timer count down.
 
-## Applications of This Project
+> **First visit after a quiet period?** The backend runs on a free plan that sleeps when idle. If you see *"Waking up the server…"*, give it up to a minute.
 
-Blip is useful in scenarios where fast, temporary collaboration is needed without account setup.
+---
 
-- DSA practice groups: share problem links, discuss approaches, and quickly spin up coding rooms.
-- Pair programming sessions: collaborate on code in real time for interviews or debugging.
-- Classroom labs and workshops: create short, controlled-time discussion/coding spaces.
-- Hackathon coordination: use public rooms for open brainstorming and private rooms for team work.
-- Interview prep: simulate timed coding rounds with live chat and synchronized editor.
-- Community Q and A corners: time-boxed public chat rooms for quick help sessions.
+## Contents
 
-### Real-World Application and Usage
+- [About](#about)
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Tech stack](#tech-stack)
+- [Getting started](#getting-started)
+- [Configuration](#configuration)
+- [Deployment](#deployment)
+- [Testing](#testing)
+- [Security and privacy](#security-and-privacy)
+- [Project structure](#project-structure)
+- [API reference](#api-reference)
+- [Known limitations](#known-limitations)
+- [Roadmap](#roadmap)
+- [License](#license)
 
-Blip can be used in real environments where teams need instant, low-overhead collaboration.
+---
 
-- Universities and colleges:
-  live coding labs, exam practice discussions, mentor office-hour help rooms.
-- EdTech and coding bootcamps:
-  session-based learning cohorts with temporary rooms for each topic or batch.
-- Developer communities:
-  open help rooms for debugging and concept discussion without permanent account requirements.
-- Interview preparation platforms:
-  timed mock interview rooms with coding editor + chat for candidate and mentor.
-- Internal engineering teams:
-  ad-hoc incident war rooms, quick architecture reviews, and short debugging swarms.
-- Hackathons and events:
-  temporary team channels and public topic rooms during constrained event windows.
+## Features
 
-### Why This Fits Real-Time Workflows
+**Rooms**
+- **No accounts.** Each visitor gets a random display name and an anonymous identity.
+- **Chat rooms** and **coding rooms**, with a 10, 20, 30 or 60 minute lifetime.
+- **Private rooms** shared by room code or one-click invite link, with host controls to export a session snapshot and end the room early.
+- **Public rooms** that anyone can join without a code. Two system rooms (`PUB10M`, `PUB20M`) restart automatically with a fresh name each cycle, and admins can add more.
+- **Automatic deletion** when the timer ends, enforced by Redis key expiry, so data is removed even if the server is down at that moment.
 
-- Fast setup:
-  users can start collaborating in seconds.
-- Time bounded sessions:
-  ideal for standups, reviews, interview rounds, and classroom slots.
-- Data minimization:
-  automatic cleanup helps for privacy-focused and temporary discussions.
-- Multi-device support:
-  works across mobile and desktop for practical on-the-go collaboration.
+**Chat**
+- Replies, emoji reactions and typing indicators
+- Image and file sharing (up to 3 MB per file)
+- Voice notes with a live microphone level meter
+- Link previews in a resizable side panel (YouTube, images and web pages)
 
-## Advantages
+**Coding**
+- Shared Monaco editor (the editor behind VS Code) with live code sync
+- Color-coded remote cursors and selections for each participant
+- Shared language selection: JavaScript, TypeScript, Python, Java, C++, Go, Rust
+- Problem-link sharing for practice sessions (LeetCode, GeeksforGeeks, Codeforces and similar)
+- Optional code runner with custom input and test cases (disabled in production by default; see [Security](#security-and-privacy))
 
-- Low friction onboarding:
-  no signup, no profiles, instant entry.
-- Ephemeral by design:
-  data is deleted automatically on room expiry.
-- Real-time collaboration:
-  chat, typing, reactions, cursor sync, and code sync happen live.
-- Flexible usage model:
-  both private invite-based rooms and public hostless rooms are supported.
-- Better communication quality:
-  supports attachments, voice notes, and rich link previews.
-- Mobile + desktop friendly:
-  responsive UI with adaptive layouts and controls.
-- Lightweight architecture:
-  simple Node + Socket.IO + Redis stack that is easy to run locally.
+**Reliability**
+- A host refresh or network blip doesn't end the room: the host gets a 45-second grace period, shown to everyone as a countdown.
+- Clients reconnect and rejoin automatically after connection drops or server restarts.
+- Room timers are rebuilt from Redis when the server starts.
+- Responsive layout for desktop and mobile.
 
-## Future Improvements
+### Use cases
 
-- Public room continuity:
-  auto-move users to fresh cycle when a public room expires.
-- Capacity and sharding:
-  max users per public room with overflow room balancing.
-- Abuse prevention:
-  spam filtering and temporary mute policies (basic rate limits are already in place).
-- Better moderation:
-  report/hide tools for public rooms.
-- Presence enhancements:
-  richer online status, idle indicators, and room activity heat.
-- Persistent optional exports:
-  optional downloadable summaries for non-sensitive workflows.
-- Production deployment hardening:
-  container sandbox for code execution, health probes, centralized logging, metrics.
-- Conflict-free collaborative editing:
-  replace whole-document sync with a CRDT (e.g. Yjs) so simultaneous edits merge.
-- Authentication extension (optional mode):
-  support org-based verified rooms while preserving anonymous default mode.
+DSA practice groups, pair programming, timed mock interviews, classroom labs, hackathon team rooms, and quick help sessions where creating accounts would get in the way.
 
-## Potential Academic Scope
+---
 
-This project can be extended as a mini-project or major-project base in areas like:
+## How it works
 
-- real-time systems design
-- scalable WebSocket architecture
-- ephemeral data lifecycle and cleanup policies
-- collaborative editing UX patterns
-- distributed cache usage with Redis
+```mermaid
+flowchart LR
+    B[Browser<br/>Next.js app] -- HTTPS REST --> S[Node.js server<br/>Express + Socket.IO]
+    B <-- WebSocket --> S
+    S -- TLS --> R[(Redis<br/>keys expire with the room)]
+```
 
-## Tech Stack
+1. Creating a room stores its metadata in Redis with a time-to-live equal to the room's lifetime.
+2. Participants connect over Socket.IO. The server binds each connection to one room and one identity, and relays chat messages, reactions, editor changes and cursors to everyone else in that room.
+3. Every piece of room data (messages, reactions, files, code) is written with the same expiry. An in-memory timer tells connected clients the moment the room ends; Redis expiry guarantees the data is gone even if that timer never fires.
+
+---
+
+## Tech stack
 
 | Layer | Technology |
 | --- | --- |
-| Frontend | Next.js 14, React, Tailwind CSS |
-| Realtime | Socket.IO |
-| Editor | @monaco-editor/react |
-| Backend | Node.js, Express |
-| Data | Redis |
+| Frontend | Next.js 14 (Pages Router), React 18, Tailwind CSS |
+| Editor | Monaco via `@monaco-editor/react` |
+| Real-time | Socket.IO 4 |
+| Backend | Node.js 22, Express 4 |
+| Data | Redis (local or Upstash) |
+| Hosting | Vercel (frontend), Render (backend), Upstash (Redis) |
 
-## Repository Structure
+---
 
-```text
-.
-|-- backend/
-|   |-- server.js          REST API, admin API, code-run endpoint, startup
-|   |-- socket.js          Socket.IO events (all identity bound server-side)
-|   |-- sessionManager.js  Redis data layer (rooms, participants, messages, reactions, code)
-|   |-- roomLifecycle.js   expiry timers, host grace period, restart recovery, system public rooms
-|   |-- codeRunner.js      async, time/output-limited code execution
-|   |-- rateLimit.js       in-memory rate limiting
-|   `-- test/              end-to-end integration tests
-|-- frontend/
-|   |-- components/
-|   |-- lib/
-|   |-- pages/
-|   `-- styles/
-|-- docker-compose.yml
-`-- README.md
-```
+## Getting started
 
-## Local Setup
+### Prerequisites
 
-### 1. Clone
+- **Node.js 22** (18.18+ works for the frontend)
+- **Redis**: a local `redis-server`, Docker, or a free Upstash database
+
+### 1. Clone and install
 
 ```bash
-git clone https://github.com/Sneh5824/Mini-Project.git
-cd "Mini Project"
+git clone https://github.com/Sneh5824/Blip.git
+cd Blip
+
+cd backend && npm install
+cd ../frontend && npm install
+cd ..
 ```
 
-### 2. Install dependencies
+### 2. Start Redis
 
 ```bash
-cd backend
-npm install
-
-cd ../frontend
-npm install
-```
-
-### 3. Start Redis
-
-Docker:
-
-```bash
-docker compose up -d
-```
-
-Or local:
-
-```bash
+docker compose up -d      # uses docker-compose.yml
+# or
 redis-server
 ```
 
-### 4. Start backend
+### 3. Configure (optional for local development)
+
+Both apps work locally with no configuration. To change anything, copy the templates:
 
 ```bash
-cd backend
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env.local
+```
+
+### 4. Run
+
+In two terminals:
+
+```bash
+cd backend && npm run dev       # http://localhost:5001
+cd frontend && npm run dev      # http://localhost:3000
+```
+
+Or both at once from the repository root (after `npm install` in the root):
+
+```bash
 npm run dev
 ```
 
-Backend: http://localhost:5001
+Open http://localhost:3000, create a room, and open the invite link in a second browser or a private window to try it with two users.
 
-### 5. Start frontend
-
-```bash
-cd frontend
-npm run dev
-```
-
-Frontend: http://localhost:3000
-
-## Deployment
-
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the free-tier setup (Vercel + Render + Upstash), environment variables, limits and troubleshooting.
+---
 
 ## Configuration
 
-Backend (`backend/.env`, template in [`backend/.env.example`](backend/.env.example)):
+### Backend: `backend/.env`
 
-| Variable | Default | Purpose |
+See [`backend/.env.example`](backend/.env.example) for a commented template.
+
+| Variable | Default | Description |
 | --- | --- | --- |
-| `NODE_ENV` | (unset) | `production` enables strict config validation, trust-proxy, and turns code execution off by default |
-| `PORT` | `5001` | HTTP / Socket.IO port |
-| `HOST` | `0.0.0.0` in production, all interfaces locally | Interface to bind |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection |
-| `FRONTEND_URL` | localhost:3000 | Allowed CORS origin(s), comma-separated; required in production |
-| `ADMIN_PASSWORD` | (unset) | Enables `/admin`; admin login is disabled without it |
-| `HOST_GRACE_MS` | `45000` | How long a private room waits for a disconnected host before ending |
-| `CODE_EXECUTION` | on in dev, off in production | Enables `/api/run` |
-| `CODE_EXEC_MAX_CONCURRENT` | `4` | Parallel code runs before the runner answers "busy" |
+| `NODE_ENV` | unset | `production` turns on strict startup checks and proxy-aware rate limiting, and turns code execution off by default |
+| `PORT` | `5001` | HTTP and WebSocket port (set automatically on Render) |
+| `HOST` | `0.0.0.0` in production | Network interface to listen on |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection; use `rediss://` (TLS) for Upstash. **Required in production.** |
+| `FRONTEND_URL` | `http://localhost:3000` | Allowed frontend origin(s), comma-separated. **Required in production.** |
+| `ADMIN_PASSWORD` | unset | Enables the `/admin` dashboard; leave unset to disable it |
+| `CODE_EXECUTION` | on in development, off in production | Enables the code runner (`/api/run`) |
+| `HOST_GRACE_MS` | `45000` | How long a room waits for a disconnected host |
 | `ROOM_CREATE_LIMIT_PER_MIN` | `20` | Room creations allowed per IP per minute |
-| `ROOM_ATTACHMENT_BUDGET_MB` | `20` | Attachment storage per room |
-| `CODE_FLUSH_MS` | `2000` | Max delay before editor content is written to Redis |
-| `TRUST_PROXY` | `1` in production | Proxy hops in front of the app (for client IPs) |
+| `ROOM_ATTACHMENT_BUDGET_MB` | `20` | File storage allowed per room |
+| `CODE_EXEC_MAX_CONCURRENT` | `4` | Code runs allowed at the same time |
+| `CODE_FLUSH_MS` | `2000` | Maximum delay before editor content is saved to Redis |
+| `TRUST_PROXY` | `1` in production | Number of proxies in front of the server |
 
-Frontend: `NEXT_PUBLIC_BACKEND_URL` (default `http://localhost:5001` in development only; required for production builds on Vercel). Template: [`frontend/.env.example`](frontend/.env.example).
+In production, the server refuses to start if a required variable is missing or invalid, and logs the reason.
+
+### Frontend: `frontend/.env.local`
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `NEXT_PUBLIC_BACKEND_URL` | `http://localhost:5001` in development | Backend URL. **Required for production builds**; the Vercel build fails without it. It is public, so never put secrets in it. |
+
+---
+
+## Deployment
+
+**Live:** [https://blip-ten-iota.vercel.app](https://blip-ten-iota.vercel.app)
+
+Blip runs at no cost on free tiers:
+
+| Part | Platform | Notes |
+| --- | --- | --- |
+| Frontend | Vercel (Hobby) | Root directory `frontend`; free for non-commercial use |
+| Backend | Render (Free web service) | Configured by [`render.yaml`](render.yaml); sleeps after 15 idle minutes and takes about a minute to wake |
+| Redis | Upstash (Free) | 256 MB storage, 500K commands per month |
+
+Step-by-step instructions, the full list of environment variables, free-tier limits and a troubleshooting table are in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
+---
 
 ## Testing
 
-The backend has an end-to-end suite that boots the real server against Redis and drives it over HTTP and Socket.IO (auth, host grace period, attachments, URL validation, reactions under concurrency, TTLs, code execution, admin API, restart recovery). It never flushes Redis, but point it at a throwaway instance anyway:
+The backend has an end-to-end test suite that starts the real server against Redis and exercises it over HTTP and Socket.IO. It covers:
+- authorization and host controls
+- the host grace period
+- file uploads and downloads
+- input validation
+- concurrent reactions
+- data expiry
+- the code runner
+- the admin API
+- restart recovery
+- production-mode checks: required settings, origin restrictions and rate limiting behind a proxy
 
 ```bash
-redis-server --port 6390
+redis-server --port 6390                     # a throwaway Redis instance
 cd backend
 TEST_REDIS_URL=redis://127.0.0.1:6390 npm test
 ```
 
-The C++ test is skipped automatically when the machine's `g++` cannot link a program.
+The tests only create their own short-lived rooms and never wipe Redis, but use a separate instance anyway. The C++ test is skipped automatically when the machine's `g++` can't build programs.
 
-## API
+---
+
+## Security and privacy
+
+- **No accounts and no personal data.** Display names are random; nothing outlives the room.
+- **Identity is not spoofable.** Each browser holds a private ID that is only ever sent to the server. Other participants see a separate per-room public ID, so nobody can impersonate the host.
+- **Server-side authorization.** After joining, every action is checked against the room and identity the server recorded, never against what the client claims. Only the host can end a private room or share problem links.
+- **Input validation.** Messages, names, links (http/https only) and files are validated server-side. Files are served with headers that force downloads for anything except images and audio, and SVG is never displayed inline.
+- **Abuse limits.** Rate limits on room creation, messages, files, reactions, code runs and admin logins, plus a per-room file storage budget.
+- **Restricted origins.** In production the backend only accepts requests from the configured frontend address.
+- **Code execution.** The runner uses timeouts, output limits, a separate temp folder per run and a stripped environment, and JavaScript/TypeScript run under Node's permission model. Python, Java and C++ still run without a full sandbox, so **the runner is off in production by default**. Only enable it on an isolated machine.
+
+---
+
+## Project structure
+
+```text
+.
+├── backend/
+│   ├── server.js            REST API, admin API, file downloads, startup and shutdown
+│   ├── socket.js            Real-time events and server-side authorization
+│   ├── sessionManager.js    Redis data layer (rooms, participants, messages, files, code)
+│   ├── roomLifecycle.js     Expiry timers, host grace period, restart recovery, public rooms
+│   ├── codeRunner.js        Time- and output-limited code execution
+│   ├── config.js            Environment validation
+│   ├── rateLimit.js         Rate limiting
+│   └── test/                End-to-end tests
+├── frontend/
+│   ├── components/          Chat panel, code editor, participant list, timer, expiry screen
+│   ├── lib/                 Socket client, identity, configuration, URL helpers
+│   ├── pages/               Landing page, room page, admin dashboard
+│   └── styles/
+├── render.yaml              Render deployment configuration
+├── docker-compose.yml       Local Redis
+└── DEPLOYMENT.md            Deployment guide
+```
+
+---
+
+## API reference
+
+<details>
+<summary><b>REST endpoints</b></summary>
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
-| POST | `/api/rooms` | Create private room |
-| GET | `/api/rooms/:roomId` | Fetch room metadata / validate room |
-| GET | `/api/public-rooms` | List active public rooms (system + admin-created) |
-| GET | `/api/rooms/:roomId/attachments/:id` | Download a chat attachment (images/audio inline, everything else as a download) |
-| POST | `/api/run` | Execute code; caller must be a participant of an active coding room (`roomId`, `guestId`) |
-| GET | `/health` | Health check |
-| POST | `/api/admin/login` | Exchange `ADMIN_PASSWORD` for a 1-hour bearer token (rate limited) |
-| GET | `/api/admin/stats` | Active rooms, public rooms, participants, messages |
-| GET | `/api/admin/public-rooms` | List public rooms |
-| POST | `/api/admin/public-rooms` | Create a public room (`timeout`, `roomType`, optional `roomName` / `roomId`; 409 if the id is taken) |
-| DELETE | `/api/admin/public-rooms/:roomId` | Remove a public room (system rooms restart with a fresh cycle) |
+| `POST` | `/api/rooms` | Create a private room |
+| `GET` | `/api/rooms/:roomId` | Room details (also used to check that a room exists) |
+| `GET` | `/api/public-rooms` | List active public rooms |
+| `GET` | `/api/rooms/:roomId/attachments/:id` | Download a shared file |
+| `POST` | `/api/run` | Run code (participants of an active coding room only; off in production by default) |
+| `GET` | `/health` | Health check, including Redis connection status |
+| `POST` | `/api/admin/login` | Exchange the admin password for a 1-hour token |
+| `GET` | `/api/admin/stats` | Active rooms, participants and messages |
+| `GET` | `/api/admin/public-rooms` | List public rooms |
+| `POST` | `/api/admin/public-rooms` | Create a public room |
+| `DELETE` | `/api/admin/public-rooms/:roomId` | Remove a public room |
 
-## Identity Model
+</details>
 
-- Each browser has a private `guestId` (localStorage). It is only ever sent to the server and decides who the host is.
-- The server derives a public `userId` per room (`sha256(roomId:guestId)`) and uses only that in anything it broadcasts (participants, messages, reactions, cursors). Other users therefore cannot learn or spoof the host's identity.
-- After `join_room`, the server binds room and identity to the socket; later events ignore any `roomId` / `guestId` the client sends.
+<details>
+<summary><b>Socket.IO events</b></summary>
 
-## Socket Events
-
-### Client -> Server
+**Client → server**
 
 | Event | Purpose |
 | --- | --- |
-| `join_room` | Join active room (`roomId`, `guestId`, `displayName`); re-sent automatically after reconnects |
+| `join_room` | Join a room (sent again automatically after reconnecting) |
 | `leave_room` | Leave the current room |
-| `send_message` | Send text/attachment/reply message (rate limited) |
-| `typing_status` | Update typing indicator |
-| `toggle_reaction` | React/unreact to message (fixed emoji set) |
-| `code_update` | Sync coding editor text (max 200KB) |
+| `send_message` | Send a text message or file, optionally as a reply |
+| `typing_status` | Typing indicator |
+| `toggle_reaction` | Add or remove an emoji reaction |
+| `code_update` | Shared editor content |
 | `language_update` | Change the shared editor language |
-| `cursor_update` | Broadcast collaborative cursor/selection |
-| `share_problem` | Share an http(s) problem link (host only in private rooms) |
-| `end_room` | End room (host only) |
+| `cursor_update` | Cursor position and selection |
+| `share_problem` | Share a problem link |
+| `end_room` | End the room (host only) |
 
-### Server -> Client
+**Server → client**
 
 | Event | Purpose |
 | --- | --- |
-| `room_joined` | Initial room payload, incl. `selfUserId` and `hostStatus` |
-| `receive_message` | New message delivered |
-| `typing_update` | Typing status changes |
-| `reaction_updated` | Message reaction updates |
-| `code_updated` | Shared code changes |
-| `language_updated` | Shared editor language changed |
-| `cursor_updated` | Remote cursor update |
-| `cursor_removed` | Remove remote cursor |
-| `participants_update` | Participant list updates |
-| `user_joined` | Join system message |
-| `user_left` | Leave system message |
-| `problem_shared` | Problem link update |
-| `host_status` | Host disconnected (with `graceEndsAt`) or reconnected |
-| `room_expired` | Room expired and cleaned up |
-| `room_error` | Joining failed (fatal) |
-| `action_error` | An action was rejected (non-fatal, shown as a toast) |
+| `room_joined` | Initial room state |
+| `receive_message` | New message |
+| `typing_update` | Typing indicator change |
+| `reaction_updated` | Reaction change |
+| `code_updated` / `language_updated` | Editor content or language changed |
+| `cursor_updated` / `cursor_removed` | Remote cursor changes |
+| `participants_update`, `user_joined`, `user_left` | Presence changes |
+| `problem_shared` | Problem link changed |
+| `host_status` | Host disconnected (with countdown) or reconnected |
+| `room_expired` | Room ended and its data was deleted |
+| `room_error` | Joining failed |
+| `action_error` | An action was rejected (shown as a notice) |
 
-## Redis Key Schema
+</details>
 
-Every per-room key expires in Redis at the room's `expiresAt`, so data is removed even if the backend is down when a room ends.
+<details>
+<summary><b>Redis keys</b></summary>
 
-| Key | Type | Description |
+Every room key expires together with the room.
+
+| Key | Type | Contents |
 | --- | --- | --- |
-| `room:{roomId}` | String | Room metadata (JSON) |
-| `participants:{roomId}` | Hash | `guestId` -> participant JSON |
-| `messages:{roomId}` | List | Chat history (last 300 messages) |
-| `msgids:{roomId}` | Set | Message ids, used to validate reactions |
-| `reactions:{roomId}` | Hash | `messageId` -> `{ emoji: [userId] }` |
-| `code:{roomId}` | String | Shared code content (written at most every `CODE_FLUSH_MS`) |
-| `att:{roomId}:{id}` | String | Attachment blob (base64 JSON); messages only carry metadata |
-| `atts:{roomId}` | Set | Attachment ids, for cleanup when the room ends |
-| `attbytes:{roomId}` | String | Bytes of attachments stored, for the per-room budget |
-| `rooms:expiry` | Sorted set | roomId scored by `expiresAt`; rebuilds timers after a restart |
-| `rooms:public` | Sorted set | Public roomIds, so listing does not scan private rooms |
+| `room:{id}` | String | Room metadata |
+| `participants:{id}` | Hash | Current participants |
+| `messages:{id}` | List | Chat history (last 300 messages) |
+| `msgids:{id}` | Set | Message IDs, for validating reactions |
+| `reactions:{id}` | Hash | Reactions per message |
+| `code:{id}` | String | Shared editor content |
+| `att:{id}:{fileId}` | String | Shared file contents |
+| `atts:{id}` / `attbytes:{id}` | Set / String | File index and storage used |
+| `rooms:expiry` | Sorted set | All rooms by expiry time (used to restore timers after a restart) |
+| `rooms:public` | Sorted set | Public rooms |
 
-## Code Execution Safety
+</details>
 
-`/api/run` executes code on the backend machine. It is **off by default when `NODE_ENV=production`**. Guards in place:
+---
 
-- only participants of an active coding room can run code; per-IP rate limit and a concurrency cap
-- asynchronous execution (the server stays responsive), 10s run / 30s compile timeouts that kill the whole process tree, 64KB output cap
-- every run gets its own temp directory, and child processes get a minimal environment (no `ADMIN_PASSWORD`, `REDIS_URL`, ...)
-- JavaScript/TypeScript run under Node's permission model: no file access outside the run directory, no child processes
+## Known limitations
 
-Python, Java, C++, Go and Rust programs still run with the backend user's OS permissions. For any public deployment, either set `CODE_EXECUTION=off` or run the backend inside a locked-down container.
+- **Simultaneous edits.** The editor syncs whole documents, so two people typing in the same instant can overwrite each other's latest keystrokes.
+- **Cold starts.** On Render's free plan the backend sleeps after 15 idle minutes, and the first visitor afterwards waits about a minute. The app shows a notice while it wakes up.
+- **Single server.** Timers, rate limits and admin sessions live in memory, which is fine for one instance. Running several instances would need the Socket.IO Redis adapter.
+- **Free-tier quotas.** Heavy use can exhaust Upstash's monthly command allowance; messages then fail to send until the quota resets.
+- **Link previews.** Some websites refuse to be shown inside another page; they open in a new tab instead.
 
-## Notes
+---
 
-- Public room IDs are fixed for routing convenience, but names are random per cycle.
-- Room data is ephemeral and deleted on expiry.
-- If the host of a private room disconnects, the room stays open for `HOST_GRACE_MS` so a refresh or network blip does not end it.
-- Code sync is whole-document, last-write-wins: two people typing at the same moment can overwrite each other's latest keystrokes.
-- Some external links may block iframe preview due to browser security headers.
+## Roadmap
 
-## Troubleshooting
+- Conflict-free collaborative editing with a CRDT library such as Yjs
+- A container sandbox so the code runner can be enabled safely in production
+- Moderation tools for public rooms: reporting, muting and spam filtering
+- Room capacity limits with overflow rooms
+- Moving users into the next cycle automatically when a public room restarts
+- Optional verified rooms for organisations, alongside the anonymous default
 
-### Backend does not start
-
-- Ensure Redis is running
-- Reinstall and retry:
-
-```bash
-cd backend
-npm ci
-npm run dev
-```
-
-### Frontend does not start
-
-```bash
-cd frontend
-npm ci
-npm run dev
-```
-
-### Tailwind at-rule warning in VS Code
-
-This is editor lint noise only. Add:
-
-```json
-{
-  "css.lint.unknownAtRules": "ignore"
-}
-```
+---
 
 ## License
 
-Academic and personal project use.
+Built by **Sneh Patel** as a Semester 6 mini project. Available for academic and personal use.
+
+<div align="center">
+
+**[Open Blip →](https://blip-ten-iota.vercel.app)**
+
+</div>
